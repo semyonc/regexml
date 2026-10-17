@@ -242,9 +242,16 @@ impl<'a> ReMatcher<'a> {
         self.matches(0)
     }
 
+    /// Whether the program matches the whole search string: a match that
+    /// starts at 0 and that the end of the program accepts only at the end of
+    /// the string (`anchored_match`, see `EndProgram`), so that every
+    /// alternative and repetition count is tried until one reaches it. The
+    /// search optimizations of `matches` (prefix, first character class,
+    /// preconditions) are not needed for a single start position.
     pub(crate) fn is_full_match(&mut self) -> bool {
         // clear the captured group state
         self.state.borrow_mut().capture_state = CaptureState::new();
+        self.state.borrow_mut().trail.clear();
 
         self.match_at(0, true)
     }

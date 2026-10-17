@@ -77,8 +77,27 @@ impl Regex {
     /// the expression must account for the entire input. [`Regex::is_match`],
     /// by contrast, searches for a match anywhere inside the haystack, which
     /// is the XPath `fn:matches` semantics.
+    ///
+    /// Every way the expression can match from the start of the haystack is
+    /// tried until one ends at its end, so the alternative or repetition count
+    /// a search would settle on first does not decide the answer. In the XSD
+    /// dialect `^` and `$` are ordinary characters (XML Schema 1.1 Part 2
+    /// §G.3); in the XPath dialect they keep their meaning as anchors.
+    ///
+    /// ```
+    /// use regexml::Regex;
+    ///
+    /// let regex = Regex::xsd("a|ab", "").unwrap();
+    /// assert!(regex.is_full_match("ab"));
+    /// assert!(!regex.is_full_match("abc"));
+    /// assert!(regex.is_match("abc"));
+    ///
+    /// assert!(Regex::xsd("^a$", "").unwrap().is_full_match("^a$"));
+    /// ```
     pub fn is_full_match(&self, haystack: &str) -> bool {
-        let mut matcher = self.matcher(haystack);
+        // Captures cannot change the answer unless there are back-references,
+        // which `new_without_captures` keeps track of.
+        let mut matcher = ReMatcher::new_without_captures(&self.re_program, haystack);
         matcher.is_full_match()
     }
 
