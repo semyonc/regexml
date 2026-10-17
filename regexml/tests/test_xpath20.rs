@@ -258,15 +258,15 @@ fn host_compile(pattern: &str, flags: &str) -> Result<Regex, Error> {
 
 /// `Regex::xpath20` accepts and rejects what the host check followed by
 /// `Regex::xpath` did, with the same kind of error, and matches the same
-/// strings — except that `.` now matches #xD (the only intended difference;
-/// a form feed, removed by `Regex::xpath` under `x` but not by the host check
-/// or by F&O, is left out of the generated patterns).
+/// strings — except that `.` now matches #xD (the only intended difference).
+/// A form feed is among the pieces: `x` removes it in neither dialect.
 #[test]
 fn agrees_with_the_host_check_followed_by_xpath() {
     // pieces rather than characters, so that `(?` and its look-alikes come up
     const PIECES: &[&str] = &[
         "a", "b", "(", ")", "?", "(?", "(?:", "( ?", "[", "]", "[(?]", "\\", "\\(", "\\ ", "-",
-        "|", "*", "+", "*?", ".", " ", "\t", "\n", "\r", "^", "$", "{1}", "{0,2}", "\\1", "\\$",
+        "|", "*", "+", "*?", ".", " ", "\t", "\n", "\r", "\u{C}", "^", "$", "{1}", "{0,2}", "\\1",
+        "\\$",
     ];
     const FLAG_CHARS: &[char] = &['s', 'm', 'i', 'x', 'x', 'x', 'q', ';', 'k'];
     const INPUTS: &[&str] = &["", "a", "ab", "a(b", "?:a", "a\nb", "a\rb", " a b", "ba(?)"];

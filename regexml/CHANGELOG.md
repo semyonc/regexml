@@ -40,6 +40,12 @@ Paligo/regexml#15, by its author. Compiling the crate needs Rust 1.79 or newer (
   character classes nested more than 64 levels deep") instead of a stack overflow that aborted the process.
   Compiling and matching recurse once per level; at the limit a debug build needs less than 400 KB of stack to
   compile and 150 KB to match. The deepest expressions in the W3C XML Schema test suite nest 15 levels. (`1b73605`)
+- **The `x` flag no longer removes a form feed (#xC).** F&O 3.1 §5.6.2: "whitespace characters (#x9, #xA, #xD and
+  #x20) in the regular expression are removed prior to matching with one exception: whitespace characters within
+  character class expressions (charClassExpr) are not removed" (F&O 1.0 §7.6.1.1 says the same). The engine removed
+  every ASCII whitespace character, #xC included, so under `x` a form feed in the pattern disappeared and, between `(`
+  and `?`, turned a capturing group into a non-capturing one. Now exactly the four are removed, in every dialect.
+  (`x flag` commit)
 
 ### Added
 

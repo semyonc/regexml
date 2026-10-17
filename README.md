@@ -46,6 +46,7 @@ See [`regexml/CHANGELOG.md`](regexml/CHANGELOG.md) for the details and the spec 
 - **Reluctant repetitions that cannot reach their minimum no longer loop forever**, and a reluctant repetition that
   matches zero times leaves its groups unmatched.
 - A lifetime made explicit on `Regex::matcher` (a compiler warning).
+- **The `x` flag removes exactly #x9, #xA, #xD and #x20** (F&O 3.1 §5.6.2), no longer the form feed #xC as well.
 - **Whole-string matching**, `Regex::is_full_match`: the matching operation of an XML Schema `pattern` facet, whose
   regular expressions are implicitly anchored "at the head and tail" (XML Schema 1.1 Part 2 appendix G). By
   [helping-kaiser](https://github.com/helping-kaiser), from Paligo/regexml#15, with more tests added here.

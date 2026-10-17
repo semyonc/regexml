@@ -1159,14 +1159,8 @@ impl ReCompiler {
                 let mut escaped = false;
                 // F&O 1.0 §7.6.1.1 and F&O 3.1 §5.6.2: "whitespace characters
                 // (#x9, #xA, #xD and #x20) in the regular expression are
-                // removed"; the other dialects also remove a form feed (#xC)
-                let is_removed = |ch: char| {
-                    if self.re_flags.language() == Language::XPath20 {
-                        matches!(ch, '\u{9}' | '\u{A}' | '\u{D}' | ' ')
-                    } else {
-                        ch.is_ascii_whitespace()
-                    }
-                };
+                // removed" — those four only, so a form feed (#xC) stays
+                let is_removed = |ch: char| matches!(ch, '\u{9}' | '\u{A}' | '\u{D}' | ' ');
                 for ch in self.pattern.iter() {
                     match ch {
                         '\\' if !escaped => {
@@ -1182,7 +1176,6 @@ impl ReCompiler {
                             sb.push(*ch);
                         }
                         _ => {
-                            // TODO: wrong whitespace
                             if nesting == 0 && is_removed(*ch) {
                                 // no action
                             } else {
