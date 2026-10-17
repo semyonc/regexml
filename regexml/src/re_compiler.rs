@@ -242,7 +242,7 @@ impl ReCompiler {
             }
             '$' => match self.re_flags.language() {
                 Language::XPath => Ok(CharacterClassBuilder::from_char('$').into()),
-                Language::XSD => Err(Error::syntax("In XSD, '$' must not be escaped")),
+                Language::Xsd => Err(Error::syntax("In XSD, '$' must not be escaped")),
             },
             's' => Ok(escape_s.into()),
             'S' => Ok(escape_s.complement().into()),
@@ -811,7 +811,7 @@ impl ReCompiler {
 
         // if the next character is a '?', make the quantifier non-greedy (reluctant)
         if self.idx < self.len && self.pattern[self.idx] == '?' {
-            if self.re_flags.language() == Language::XSD {
+            if self.re_flags.language() == Language::Xsd {
                 return Err(Error::syntax("Reluctant quantifier not allowed in XSD"));
             }
             self.idx += 1;

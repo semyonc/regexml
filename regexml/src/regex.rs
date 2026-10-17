@@ -61,7 +61,7 @@ impl Regex {
     /// assert!(Regex::xsd(r"\P{IsUnknown}", "i;k").unwrap().is_match("a"));
     /// ```
     pub fn xsd(re: &str, flags: &str) -> Result<Self, Error> {
-        Self::new(re, flags, Language::XSD)
+        Self::new(re, flags, Language::Xsd)
     }
 
     /// Returns `true` if the argument matches this regular expression.

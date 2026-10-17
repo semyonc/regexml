@@ -8,7 +8,7 @@ use crate::re_compiler::Error;
 pub(crate) enum Language {
     /// Follow the XML Schema definition of regular expressions only,
     /// don't allow XPath extensions
-    XSD,
+    Xsd,
     /// Follow the XPath 3.1 definition of regular expressions, which
     /// includes some additional features.
     XPath,
