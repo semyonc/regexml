@@ -13,7 +13,8 @@ The first release of **`regexml-fork`**, an unofficial fork of regexml 0.2.2 (no
 Paligo). The library is `regexml_fork`; a project can keep the name `regexml` in its code with
 `regexml = { package = "regexml-fork", version = "0.3" }`. The versions below 0.3.0 are regexml's own history, kept
 as it was. The first seven changes were submitted upstream as Paligo/regexml#16; `is_full_match` is
-Paligo/regexml#15, by its author. Compiling the crate needs Rust 1.79 or newer (an inline `const` block).
+Paligo/regexml#15, by its author. The minimum supported Rust version is 1.85 (`rust-version`; the code itself needs
+1.79, for an inline `const` block).
 
 ### Changed (behaviour that was wrong in 0.2.2)
 
