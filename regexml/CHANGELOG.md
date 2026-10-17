@@ -74,8 +74,8 @@ Paligo/regexml#15, by its author. The minimum supported Rust version is 1.85 (`r
   whole-string match, quadratic for a search over every start position — at 0.24 to 2.6 times 0.2.2's time at 3 200
   characters (`(a*)*b` searched in 3 200 a's, "c", "b": 0.38 s on 0.2.2, 0.18 s here). The exception is a
   back-reference to a group in such a repetition (see the known limitations). A whole-string match now checks, as a
-  search does, the input's length and what every match needs before it tries the start. (`45a0c79`, the search's
-  order of growth in the round-3 commit)
+  search does, the input's length and what every match needs before it tries the start. (`45a0c79`,
+  `d9d7811`)
 - **What follows `^` in multi-line mode is not tied to the start of the string.** The checks a search makes before
   it tries a start position (the operations every match needs) placed an operation after `^` at position 0 even in
   multi-line mode, where `^` also matches after a newline (F&O 3.1 §5.6.2: "^ matches the start of any line"):
