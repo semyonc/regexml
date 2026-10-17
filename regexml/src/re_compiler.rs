@@ -925,8 +925,14 @@ impl ReCompiler {
                         quantifier_type = Some('*');
                     }
                     Some('{') => {
-                        // bounds are meaningless
-                        quantifier_type = Some('*')
+                        // XSD 1.1 Part 2 §G.2: S{n,m} denotes the strings of
+                        // L(S)^k for n <= k <= m. When S matches the empty
+                        // string, any shorter count can be made up to n with
+                        // empty repetitions, so the lower bound adds nothing;
+                        // the upper bound still counts. (This was turned into
+                        // `*` as in the Java original, which dropped the upper
+                        // bound: `(a|){2}` matched "aaaa".)
+                        self.bracket_min = 0;
                     }
                     _ => {}
                 }
@@ -980,9 +986,16 @@ impl ReCompiler {
                         max,
                         match_length,
                     )))
-                } else {
-                    // otherwise need to match with nothing
+                } else if min == 0 {
+                    // an operand that only matches the empty string (an
+                    // anchor, an empty group): zero repetitions match the
+                    // empty string, which is all any repetition can match
                     Ok(Operation::from(Nothing))
+                } else {
+                    // at least one repetition: the operand once, since every
+                    // further repetition tests the same position again. (It
+                    // used to become nothing at all, so `a($)+b` matched "ab".)
+                    Ok(ret)
                 }
             } else {
                 Ok(Operation::from(Repeat::new(ret, min, max, true)))

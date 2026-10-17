@@ -40,6 +40,12 @@ Paligo/regexml#15, by its author. Compiling the crate needs Rust 1.79 or newer (
   character classes nested more than 64 levels deep") instead of a stack overflow that aborted the process.
   Compiling and matching recurse once per level; at the limit a debug build needs less than 400 KB of stack to
   compile and 150 KB to match. The deepest expressions in the W3C XML Schema test suite nest 15 levels. (`1b73605`)
+- **A counted repetition keeps its upper bound when its operand can match the empty string.** XSD 1.1 Part 2 §G.2:
+  S{n,m} denotes "All strings in L(S)^k for all k such that n <= k <= m". The compiler, as the Java original, turned
+  `{n,m}` of such an operand into `*`, so `^(a|){2}$` matched "aaaa" and an XSD pattern facet like `(\d|){2}`
+  accepted any number of digits. Now only the lower bound is dropped (empty repetitions can always make it up). And a
+  repetition of an operand that only matches the empty string (an anchor or an empty group) with a minimum of one or
+  more is the operand once instead of nothing: `a($)+b` no longer matches "ab". (`counted repetition` commit)
 - **The `x` flag no longer removes a form feed (#xC).** F&O 3.1 §5.6.2: "whitespace characters (#x9, #xA, #xD and
   #x20) in the regular expression are removed prior to matching with one exception: whitespace characters within
   character class expressions (charClassExpr) are not removed" (F&O 1.0 §7.6.1.1 says the same). The engine removed
