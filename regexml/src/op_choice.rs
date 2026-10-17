@@ -2,7 +2,7 @@ use icu_collections::codepointinvlist::CodePointInversionListBuilder;
 
 use crate::{
     character_class::CharacterClass,
-    operation::{Operation, OperationControl, MATCHES_ZLS_NEVER},
+    operation::{Operation, OperationControl, Within, MATCHES_ZLS_NEVER},
     re_flags::ReFlags,
     re_matcher::ReMatcher,
 };
@@ -101,9 +101,9 @@ impl OperationControl for Choice {
         }
     }
 
-    fn mark_nested(&mut self, within_repetition: bool) {
+    fn mark_nested(&mut self, within: Within) {
         for branch in &mut self.branches {
-            branch.mark_nested(within_repetition);
+            branch.mark_nested(within);
         }
     }
 }

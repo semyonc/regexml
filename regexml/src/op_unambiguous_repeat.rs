@@ -1,5 +1,5 @@
 use crate::{
-    operation::{Operation, OperationControl, RepeatOperation, MATCHES_ZLS_ANYWHERE},
+    operation::{Operation, OperationControl, RepeatOperation, Within, MATCHES_ZLS_ANYWHERE},
     re_flags::ReFlags,
     re_matcher::ReMatcher,
 };
@@ -100,8 +100,8 @@ impl OperationControl for UnambiguousRepeat {
         self.operation.collect_groups(groups);
     }
 
-    fn mark_nested(&mut self, _within_repetition: bool) {
-        self.operation.mark_nested(true);
+    fn mark_nested(&mut self, _within: Within) {
+        self.operation.mark_nested(Within::Nested);
     }
 }
 

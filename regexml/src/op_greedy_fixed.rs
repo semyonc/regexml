@@ -1,7 +1,7 @@
 use crate::{
     op_nothing::Nothing,
     operation::{
-        captures, groups_of, unbind_groups, Operation, OperationControl, RepeatOperation,
+        captures, groups_of, unbind_groups, Operation, OperationControl, RepeatOperation, Within,
         MATCHES_ZLS_ANYWHERE,
     },
     re_flags::ReFlags,
@@ -16,6 +16,9 @@ pub(crate) struct GreedyFixed {
     pub(crate) min: usize,
     max: usize,
     len: usize,
+    // whether it is in the operand of a repetition that is not nested, with
+    // only sequences, choices and groups in between (`ReMatcher::covered`)
+    covered: bool,
 }
 
 impl GreedyFixed {
@@ -25,6 +28,7 @@ impl GreedyFixed {
             min,
             max,
             len,
+            covered: false,
         }
     }
 }
@@ -63,6 +67,7 @@ impl OperationControl for GreedyFixed {
             min: self.min,
             max: self.max,
             len: self.len,
+            covered: self.covered,
         })
     }
 
@@ -82,6 +87,25 @@ impl OperationControl for GreedyFixed {
         }
         if position >= guard && self.min > 0 {
             return Box::new(std::iter::empty());
+        }
+
+        if self.covered && self.max == usize::MAX {
+            if let Some(mut seen) = matcher.covered(self as *const Self as usize) {
+                let ends = uncovered_ends(
+                    &self.operation,
+                    matcher,
+                    &mut seen,
+                    position,
+                    self.min,
+                    self.len,
+                );
+                return match ends {
+                    Some((first, last)) => {
+                        Box::new(IntStepIterator::new(last, -(self.len as i64), first))
+                    }
+                    None => Box::new(std::iter::empty()),
+                };
+            }
         }
 
         if matcher.tracks_captures() && captures(&self.operation) {
@@ -121,8 +145,9 @@ impl OperationControl for GreedyFixed {
         self.operation.collect_groups(groups);
     }
 
-    fn mark_nested(&mut self, _within_repetition: bool) {
-        self.operation.mark_nested(true);
+    fn mark_nested(&mut self, within: Within) {
+        self.covered = within == Within::TopOperand;
+        self.operation.mark_nested(Within::Nested);
     }
 }
 
@@ -227,8 +252,46 @@ impl Iterator for CapturingStepIterator<'_> {
     }
 }
 
+// Where a fixed-length repetition of `operation` (`len` long, at least `min`
+// times, with no upper bound) from `position` can end that no earlier match
+// of it reached, when `ReMatcher::covered` gives it `seen`: the positions
+// from the first returned to the last, every `len`, or none. `seen` holds for
+// each position one more than the repetitions (counted up to `min`) it was
+// reached with, or 0. A position reached before with as many repetitions or
+// more leads on only to what was reached from it then, so the repetition
+// stops there.
+pub(crate) fn uncovered_ends(
+    operation: &Operation,
+    matcher: &ReMatcher,
+    seen: &mut [u32],
+    position: usize,
+    min: usize,
+    len: usize,
+) -> Option<(usize, usize)> {
+    let mut p = position;
+    let mut count = 0;
+    let last = loop {
+        let class = count.min(min).min(u32::MAX as usize - 1) as u32 + 1;
+        if seen[p] >= class {
+            if count == 0 {
+                return None;
+            }
+            break p - len;
+        }
+        seen[p] = class;
+        if operation.matches_iter(matcher, p).next().is_some() {
+            p += len;
+            count += 1;
+        } else {
+            break p;
+        }
+    };
+    let first = position.saturating_add(len.saturating_mul(min));
+    (first <= last).then_some((first, last))
+}
+
 #[derive(Debug)]
-struct IntStepIterator {
+pub(crate) struct IntStepIterator {
     current: i64,
     step: i64,
     limit: i64,

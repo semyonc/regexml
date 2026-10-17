@@ -7,7 +7,7 @@ use crate::{
     character_class::CharacterClass,
     operation::{
         captures, groups_of, unbind_groups, Operation, OperationControl, RepeatOperation,
-        RestoreCaptures, MATCHES_ZLS_ANYWHERE, MATCHES_ZLS_NEVER,
+        RestoreCaptures, Within, MATCHES_ZLS_ANYWHERE, MATCHES_ZLS_NEVER,
     },
     re_flags::ReFlags,
     re_matcher::{ReMatcher, RepeatResult, Settled, StateKey},
@@ -153,9 +153,13 @@ impl OperationControl for Repeat {
         self.operation.collect_groups(groups);
     }
 
-    fn mark_nested(&mut self, within_repetition: bool) {
-        self.nested = within_repetition;
-        self.operation.mark_nested(true);
+    fn mark_nested(&mut self, within: Within) {
+        self.nested = within != Within::Nothing;
+        self.operation.mark_nested(if self.nested {
+            Within::Nested
+        } else {
+            Within::TopOperand
+        });
     }
 }
 
@@ -232,6 +236,10 @@ impl Repeat {
             // positions it reached already: the states after the first
             // repetition need no successors.
             later: self.later_successors(matcher, self.effective_min(matcher)),
+            cover: !self.nested
+                && self.max == usize::MAX
+                && matcher.answer_only()
+                && !no_shortcuts(),
         })
     }
 }
@@ -423,6 +431,10 @@ struct RepeatIterator<'a> {
     // the successors of the states after the first repetition
     // (`Repeat::later_successors`)
     later: Later,
+    // whether the fixed-length repetitions in the operand may stop where
+    // they have been before, when matched from a state with at least `min`
+    // repetitions (`ReMatcher::covered`)
+    cover: bool,
 }
 
 #[cfg(test)]
@@ -770,12 +782,15 @@ impl Iterator for RepeatIterator<'_> {
             let state = self.states.last_mut().unwrap();
             if state.count < self.max && !state.last {
                 let (position, count) = (state.position, state.count + 1);
+                let covering = self.matcher.covering(self.cover && count >= self.min);
                 let operand = state
                     .operand
                     .get_or_insert_with(|| self.operation.matches_iter(self.matcher, position));
                 #[cfg(test)]
                 STEPS.with(|steps| steps.set(steps.get() + 1));
-                match operand.next() {
+                let end = operand.next();
+                self.matcher.covering(covering);
+                match end {
                     Some(end) if end == position && count > self.min => {
                         // an empty repetition beyond the minimum: the last
                         // one (see the type's comment). It reaches a
@@ -890,6 +905,13 @@ mod tests {
             ("(a*){2,}b", "cb"),
             ("(?:a*)*b", "cb"),
             ("(a?)*b", "cb"),
+            // operands that are not closed under repetition, with a
+            // fixed-length repetition inside (`ReMatcher::covered`)
+            ("(a*b*)*c", "cb"),
+            ("(a*|b)*c", "xc"),
+            ("(\\w+\\s?)*!", "-!"),
+            ("((a+)b?)*c", "xc"),
+            ("(a*?b*)*c", "cb"),
         ] {
             let regex = Regex::xpath(pattern, "").unwrap();
             type Op<'a> = (&'a str, Box<dyn Fn(&str) -> bool + 'a>, f64);
@@ -959,6 +981,11 @@ mod tests {
             "(a*?)",
             "((a|ab)*)",
             "((ab|a)+?)",
+            "(a*|b)",
+            "(?:a+b?)",
+            "(a*?b*)",
+            "(?:a|b+)",
+            "(a*ba*)",
         ];
         const QUANTS: &[&str] = &[
             "", "", "*", "*", "+", "?", "{2}", "{0,2}", "{1,}", "{2,}", "*?", "+?", "{1,}?",

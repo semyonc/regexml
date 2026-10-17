@@ -5,7 +5,7 @@ use crate::{
     op_nothing::Nothing,
     op_unambiguous_repeat::UnambiguousRepeat,
     operation::{
-        Operation, OperationControl, MATCHES_ZLS_ANYWHERE, MATCHES_ZLS_AT_END,
+        Operation, OperationControl, Within, MATCHES_ZLS_ANYWHERE, MATCHES_ZLS_AT_END,
         MATCHES_ZLS_AT_START, MATCHES_ZLS_NEVER,
     },
     re_compiler::ReCompiler,
@@ -186,9 +186,9 @@ impl OperationControl for Sequence {
         }
     }
 
-    fn mark_nested(&mut self, within_repetition: bool) {
+    fn mark_nested(&mut self, within: Within) {
         for operation in &mut self.operations {
-            operation.mark_nested(within_repetition);
+            operation.mark_nested(within);
         }
     }
 }

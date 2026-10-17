@@ -18,7 +18,7 @@ use crate::{
     op_reluctant_fixed::ReluctantFixed,
     op_repeat::Repeat,
     op_sequence::Sequence,
-    operation::{Operation, OperationControl, MATCHES_ZLS_ANYWHERE, MATCHES_ZLS_NEVER},
+    operation::{Operation, OperationControl, Within, MATCHES_ZLS_ANYWHERE, MATCHES_ZLS_NEVER},
     re_flags::{Language, ReFlags},
     re_program::{ReProgram, OPT_HASBACKREFS},
 };
@@ -1230,7 +1230,7 @@ impl ReCompiler {
                 return Err(Error::syntax("Unexpected input remains"));
             }
             let mut operation = operation.optimize(&self.re_flags);
-            operation.mark_nested(false);
+            operation.mark_nested(Within::Nothing);
 
             let mut program = ReProgram::new(
                 self.pattern,

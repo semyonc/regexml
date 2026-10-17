@@ -1,5 +1,5 @@
 use crate::{
-    operation::{Operation, OperationControl},
+    operation::{Operation, OperationControl, Within},
     re_flags::ReFlags,
     re_matcher::ReMatcher,
     re_program::OPT_HASBACKREFS,
@@ -72,8 +72,8 @@ impl OperationControl for Capture {
         self.child_op.collect_groups(groups);
     }
 
-    fn mark_nested(&mut self, within_repetition: bool) {
-        self.child_op.mark_nested(within_repetition);
+    fn mark_nested(&mut self, within: Within) {
+        self.child_op.mark_nested(within);
     }
 }
 

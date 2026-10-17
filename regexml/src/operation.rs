@@ -99,12 +99,14 @@ pub(crate) trait OperationControl {
     /// including this one if it is a capturing group itself.
     fn collect_groups(&self, _groups: &mut Vec<usize>) {}
 
-    /// Record, in every variable-length repetition inside this operation,
-    /// whether it is nested in a repetition (`within_repetition`, or this
-    /// operation being one). A repetition that is not has the same
-    /// continuation wherever and whenever it is matched, which
-    /// `ReMatcher::top_memo` relies on.
-    fn mark_nested(&mut self, _within_repetition: bool) {}
+    /// Record, in every repetition inside this operation, where it is
+    /// (`within`, or this operation itself when it is one): a variable-length
+    /// repetition that is not nested in another one has the same continuation
+    /// wherever and whenever it is matched, which `ReMatcher::settled` relies
+    /// on, and so has a fixed-length repetition in its operand with only
+    /// sequences, choices and groups in between, as long as the repetition
+    /// around it has done its minimum (`ReMatcher::covered`).
+    fn mark_nested(&mut self, _within: Within) {}
 
     /// Access child information so we can structurally dive into
     /// a regex, mostly for testing purposes.
@@ -113,6 +115,18 @@ pub(crate) trait OperationControl {
     fn children(&self) -> Vec<Operation> {
         Vec::new()
     }
+}
+
+/// Where an operation is, for `OperationControl::mark_nested`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Within {
+    /// in no repetition
+    Nothing,
+    /// in the operand of a variable-length repetition that is in no
+    /// repetition, with only sequences, choices and groups in between
+    TopOperand,
+    /// anywhere else in a repetition
+    Nested,
 }
 
 pub(crate) trait RepeatOperation {

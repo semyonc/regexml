@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell, RefMut};
 use std::rc::Rc;
 
 use ahash::{HashMap, HashMapExt, HashSet};
@@ -32,6 +32,11 @@ pub(crate) struct ReMatcher<'a> {
     // whether only the yes/no answer is wanted, so that neither the captures
     // nor the order in which matches are found make a difference
     answer_only: bool,
+    // what the fixed-length repetitions in the operands of repetitions that
+    // are not nested have reached, and whether a repetition is matching its
+    // operand where they may use it (`ReMatcher::covered`)
+    covered: RefCell<HashMap<usize, Vec<u32>>>,
+    covering: Cell<bool>,
 }
 
 #[derive(Debug)]
@@ -132,6 +137,8 @@ impl<'a> ReMatcher<'a> {
             case_mapper: CaseMapper::new(),
             track_captures: true,
             answer_only: false,
+            covered: RefCell::new(HashMap::new()),
+            covering: Cell::new(false),
         }
     }
 
@@ -183,6 +190,37 @@ impl<'a> ReMatcher<'a> {
     pub(crate) fn starts_more_than_once(&self) -> bool {
         let starts_with_caret = self.program.optimization_flags & OPT_HASBOL != 0;
         !self.anchored_match() && (!starts_with_caret || self.program.flags.is_multi_line())
+    }
+
+    /// Where only the answer counts, which positions the fixed-length
+    /// repetition at the address `repetition` has reached, and with how many
+    /// repetitions (`op_greedy_fixed::uncovered_ends`): when it is in the
+    /// operand of a repetition that is not nested (`Within::TopOperand`), and
+    /// only while that repetition matches its operand from a state with at
+    /// least its minimum of repetitions and no upper bound (`covering`). Each
+    /// such match of the operand has the same continuation — further
+    /// repetitions from the minimum on, then the rest of the expression — so a
+    /// fixed-length repetition in it that comes back to a position it reached
+    /// before, with as many repetitions or more, leads on only to what it led
+    /// on to from there before, which the search has explored or will explore:
+    /// when only the answer counts, it need not go on. The matcher answers one
+    /// question (`new_for_answer`), so what it reached from an earlier start
+    /// position of the search has failed: the tables stay. Without them each
+    /// position in a run of a's that `(a*b*)*c` cannot match through found the
+    /// rest of the run again: quadratic in the run's length.
+    pub(crate) fn covered(&self, repetition: usize) -> Option<RefMut<'_, Vec<u32>>> {
+        if !self.covering.get() {
+            return None;
+        }
+        let len = self.search.len() + 1;
+        Some(RefMut::map(self.covered.borrow_mut(), |tables| {
+            tables.entry(repetition).or_insert_with(|| vec![0; len])
+        }))
+    }
+
+    /// Sets whether `covered` is in use, and returns whether it was.
+    pub(crate) fn covering(&self, on: bool) -> bool {
+        self.covering.replace(on)
     }
 
     /// What the repetition `repeat`, not nested in another repetition, has

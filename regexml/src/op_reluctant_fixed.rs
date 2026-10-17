@@ -1,7 +1,8 @@
 use crate::{
+    op_greedy_fixed::{uncovered_ends, IntStepIterator},
     operation::{
         captures, groups_of, unbind_groups, Operation, OperationControl, RepeatOperation,
-        RestoreCaptures, MATCHES_ZLS_ANYWHERE,
+        RestoreCaptures, Within, MATCHES_ZLS_ANYWHERE,
     },
     re_flags::ReFlags,
     re_matcher::ReMatcher,
@@ -15,6 +16,9 @@ pub(crate) struct ReluctantFixed {
     pub(crate) min: usize,
     max: usize,
     len: usize,
+    // whether it is in the operand of a repetition that is not nested, with
+    // only sequences, choices and groups in between (`ReMatcher::covered`)
+    covered: bool,
 }
 
 impl ReluctantFixed {
@@ -24,6 +28,7 @@ impl ReluctantFixed {
             min,
             max,
             len,
+            covered: false,
         }
     }
 }
@@ -61,6 +66,7 @@ impl OperationControl for ReluctantFixed {
             min: self.min,
             max: self.max,
             len: self.len,
+            covered: self.covered,
         })
     }
 
@@ -69,6 +75,25 @@ impl OperationControl for ReluctantFixed {
         matcher: &'a ReMatcher<'a>,
         position: usize,
     ) -> Box<dyn Iterator<Item = usize> + 'a> {
+        if self.covered && self.max == usize::MAX {
+            // only the answer counts: the order of the ends does not matter
+            if let Some(mut seen) = matcher.covered(self as *const Self as usize) {
+                let ends = uncovered_ends(
+                    &self.operation,
+                    matcher,
+                    &mut seen,
+                    position,
+                    self.min,
+                    self.len,
+                );
+                return match ends {
+                    Some((first, last)) => {
+                        Box::new(IntStepIterator::new(first, self.len as i64, last))
+                    }
+                    None => Box::new(std::iter::empty()),
+                };
+            }
+        }
         let capturing = matcher.tracks_captures() && captures(&self.operation);
         let iter = Box::new(ReluctantFixedIterator::new(
             self.operation.as_ref(),
@@ -99,8 +124,9 @@ impl OperationControl for ReluctantFixed {
         self.operation.collect_groups(groups);
     }
 
-    fn mark_nested(&mut self, _within_repetition: bool) {
-        self.operation.mark_nested(true);
+    fn mark_nested(&mut self, within: Within) {
+        self.covered = within == Within::TopOperand;
+        self.operation.mark_nested(Within::Nested);
     }
 }
 
