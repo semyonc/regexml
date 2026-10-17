@@ -1,11 +1,16 @@
+use std::rc::Rc;
+
+use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
+
 use crate::{
     character_class::CharacterClass,
     operation::{
-        captures, groups_of, unbind_groups, ForceProgressIterator, Operation, OperationControl,
-        RepeatOperation, RestoreCaptures, MATCHES_ZLS_ANYWHERE,
+        captures, groups_of, unbind_groups, Operation, OperationControl, RepeatOperation,
+        RestoreCaptures, MATCHES_ZLS_ANYWHERE,
     },
     re_flags::ReFlags,
-    re_matcher::ReMatcher,
+    re_matcher::{ReMatcher, RepeatResult},
+    re_program::OPT_HASBACKREFS,
 };
 
 // Handle a repetition (with possible min and max) where the
@@ -105,73 +110,51 @@ impl Repeat {
         matcher: &'a ReMatcher<'a>,
         position: usize,
     ) -> Box<dyn Iterator<Item = usize> + 'a> {
-        let mut iterators: Vec<Box<dyn Iterator<Item = usize>>> = Vec::new();
-        let mut positions = Vec::new();
-        let bound = self.max.min(matcher.search.len() - position + 1);
-        let mut p = position;
-        if self.greedy {
-            // Prime the arrays first with iterators up to the maximum length,
-            // stopping if there is no match
-
-            // Porting note: is_duplicate_zero_length_match can be dedicated to
-            // the Repeat (and not the various subclasses in the original Java
-            // code, i.e. GreedyFixed, ReluctantFixed, UnambiguousRepeat),
-            // because each of these subclasses overrides matches_iter anyway,
-            // so this code can never be reached.
-            // with zero occurrences allowed, the groups of a capturing
-            // operand are left unmatched when zero occurrences are reported
-            let mut zero_groups = None;
-            if self.min == 0 && !matcher.is_duplicate_zero_length_match(self, position) {
-                // add a match at the current position if zero occurrences are allowed
-                iterators.push(Box::new(std::iter::once(position)));
-                positions.push(p);
-                if matcher.tracks_captures() && captures(&self.operation) {
-                    zero_groups = Some(groups_of(&self.operation));
-                }
-            }
-            for _i in 0..bound {
-                let mut it = self.operation.matches_iter(matcher, p);
-                if let Some(next) = it.next() {
-                    p = next;
-                    iterators.push(it);
-                    positions.push(p);
-                } else if iterators.is_empty() {
-                    return Box::new(std::iter::empty());
-                } else {
-                    break;
-                }
-            }
-            // Now return an iterator which returns all the matching positions
-            // in order
-            Box::new(ForceProgressIterator::new(Box::new(
-                GreedyRepeatIterator::new(
+        // with zero occurrences allowed, the groups of a capturing operand
+        // are left unmatched when zero occurrences are reported
+        let zero_groups = (self.min == 0 && matcher.tracks_captures() && captures(&self.operation))
+            .then(|| groups_of(&self.operation));
+        // Where a repetition can go from a state, and whether the rest of
+        // the expression matches from where it ends, depend on the state's
+        // position and, through back-references, on what the groups have
+        // captured — nothing else — so a state that has been explored once
+        // need not be explored again.
+        let backrefs = matcher.program.optimization_flags & OPT_HASBACKREFS != 0;
+        if matcher.may_reuse_repeat_results() {
+            if let Some(results) = matcher.repeat_results(self, position) {
+                return Box::new(Replay {
                     matcher,
-                    self.operation.as_ref(),
-                    iterators,
-                    positions,
-                    bound,
-                    self.min,
+                    results,
+                    next: 0,
+                    mark: matcher.trail_mark(),
                     zero_groups,
-                ),
-            )))
-        } else {
-            // reluctant (non-greedy) repeat; as in the greedy case, the groups
-            // of a capturing operand are left unmatched when zero occurrences
-            // are reported
-            let zero_groups =
-                (self.min == 0 && matcher.tracks_captures() && captures(&self.operation))
-                    .then(|| groups_of(&self.operation));
-            Box::new(ForceProgressIterator::new(Box::new(
-                ReluctantRepeatIterator::new(
-                    matcher,
-                    self.operation.as_ref(),
-                    position,
-                    self.min,
-                    self.max,
-                    zero_groups,
-                ),
-            )))
+                });
+            }
         }
+        Box::new(RepeatIterator {
+            repeat: self,
+            record: matcher.may_reuse_repeat_results().then(Vec::new),
+            start: position,
+            mark: matcher.trail_mark(),
+            matcher,
+            operation: self.operation.as_ref(),
+            min: self.min,
+            max: self.max,
+            greedy: self.greedy,
+            states: vec![State {
+                position,
+                count: 0,
+                operand: None,
+                reported: false,
+                last: false,
+            }],
+            zero_groups,
+            unbound: None,
+            backrefs,
+            entered: HashMap::new(),
+            entered_below_min: HashSet::new(),
+            reported: HashSet::new(),
+        })
     }
 }
 
@@ -193,133 +176,144 @@ impl RepeatOperation for Repeat {
     }
 }
 
-struct GreedyRepeatIterator<'a> {
-    primed: bool,
-    matcher: &'a crate::re_matcher::ReMatcher<'a>,
-    operation: &'a Operation,
-    min: usize,
-    iterators: Vec<Box<dyn Iterator<Item = usize> + 'a>>,
-    positions: Vec<usize>,
-    bound: usize,
-    // the groups of a capturing operand when `iterators[0]` is the
-    // zero-occurrence entry, and the capture log's length before they were
-    // left unmatched for reporting zero occurrences
-    zero_groups: Option<Vec<usize>>,
-    unbound: Option<usize>,
+// A state of the search a repetition makes: `count` repetitions of the
+// operand done, ending at `position`. Its successors are the states one
+// repetition further, one per match of the operand starting at `position`,
+// in the order the operand reports them.
+struct State<'a> {
+    position: usize,
+    count: usize,
+    // the operand's matches from `position`, for the successors; `None`
+    // before the first one is asked for and once they are exhausted
+    operand: Option<Box<dyn Iterator<Item = usize> + 'a>>,
+    // whether this state's own position has been reported (or skipped)
+    reported: bool,
+    // whether it was reached with an empty repetition beyond the minimum,
+    // after which there is no further repetition
+    last: bool,
 }
 
-impl<'a> GreedyRepeatIterator<'a> {
-    fn new(
-        matcher: &'a ReMatcher<'a>,
-        operation: &'a Operation,
-        iterators: Vec<Box<dyn Iterator<Item = usize> + 'a>>,
-        positions: Vec<usize>,
-        bound: usize,
-        min: usize,
-        zero_groups: Option<Vec<usize>>,
-    ) -> Self {
-        Self {
-            primed: true,
-            matcher,
-            operation,
-            min,
-            iterators,
-            positions,
-            bound,
-            zero_groups,
-            unbound: None,
-        }
-    }
-}
-
-impl Iterator for GreedyRepeatIterator<'_> {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(mark) = self.unbound.take() {
-            self.matcher.undo_to(mark);
-        }
-        let has_next = if self.primed && self.iterators.len() >= self.min {
-            !self.iterators.is_empty()
-        } else if self.iterators.is_empty() {
-            false
-        } else {
-            loop {
-                let top = self.iterators.last_mut().unwrap();
-                if let Some(mut p) = top.next() {
-                    self.positions.pop();
-                    self.positions.push(p);
-                    while self.iterators.len() < self.bound {
-                        let mut it = self.operation.matches_iter(self.matcher, p);
-                        if let Some(next) = it.next() {
-                            p = next;
-                            self.iterators.push(it);
-                            self.positions.push(p)
-                        } else {
-                            break;
-                        }
-                    }
-                } else {
-                    self.iterators.pop();
-                    self.positions.pop();
-                }
-                if self.iterators.len() >= self.min || self.iterators.is_empty() {
-                    break;
-                }
-            }
-            !self.iterators.is_empty()
-        };
-        if has_next {
-            self.primed = false;
-            if self.iterators.len() == 1 {
-                if let Some(groups) = &self.zero_groups {
-                    self.unbound = Some(unbind_groups(self.matcher, groups));
-                }
-            }
-            self.positions.last().copied()
-        } else {
-            None
-        }
-    }
-}
-
-struct ReluctantRepeatIterator<'a> {
-    matcher: &'a crate::re_matcher::ReMatcher<'a>,
+// The positions a repetition can end at, in the order of a backtracking
+// search: a depth-first walk of the states, which reports a state's position
+// after its successors when greedy ("the longest possible substring", F&O 3.1
+// §5.6.1.2) and before them when reluctant ("the shortest possible substring
+// consistent with the match as a whole succeeding"), and reports only states
+// with at least `min` repetitions.
+//
+// Up to the minimum, a repetition may match the empty string like any other,
+// so `(a|){2}` matches "". Beyond it, a repetition that matches the empty
+// string is the last one: it ends where it starts, so going on from there
+// would only reach states already reached, and would let a repetition of an
+// operand that can match the empty string go on for ever. It is still taken,
+// as in the Java original and in Perl's and Python's engines, so that `(a|)*`
+// over "aa" ends with an empty repetition and captures "" (ECMAScript's
+// RepeatMatcher does not take it).
+//
+// This replaces the Java original's iterators, which kept at most one way of
+// matching each repetition when reluctant, explored the repetition twice when
+// zero occurrences were allowed, and guarded against endless zero-length
+// matches with a counter (`ForceProgressIterator`) that also cut off
+// legitimate results — `^([ab]*)+b$` did not match "ab".
+struct RepeatIterator<'a> {
+    // the repetition, and the positions reported so far when they are to be
+    // kept (`ReMatcher::repeat_results`), and where it started
+    repeat: &'a Repeat,
+    record: Option<Vec<RepeatResult>>,
+    start: usize,
+    // the capture log's length when it started
+    mark: usize,
+    matcher: &'a ReMatcher<'a>,
     operation: &'a Operation,
     min: usize,
     max: usize,
-    counter: usize,
-    position: Option<usize>,
+    greedy: bool,
+    // the path from the starting state (zero repetitions) to the current one
+    states: Vec<State<'a>>,
     // the groups of a capturing operand when zero occurrences are allowed,
     // and the capture log's length before they were left unmatched for
     // reporting zero occurrences
     zero_groups: Option<Vec<usize>>,
     unbound: Option<usize>,
+    // whether the program has back-references, so that a state is known by
+    // its position together with what the groups hold (`key`)
+    backrefs: bool,
+    // for each state key, the fewest repetitions with which a state with that
+    // key (and at least `min` repetitions) has been entered: a state with the
+    // same key and as many or more repetitions can only reach what that one
+    // reached
+    entered: HashMap<Key, usize>,
+    // the states entered with fewer than `min` repetitions
+    entered_below_min: HashSet<(Key, usize)>,
+    // the state keys already reported: the rest of the expression failed
+    // from them, and would fail again
+    reported: HashSet<Key>,
 }
 
-impl<'a> ReluctantRepeatIterator<'a> {
-    fn new(
-        matcher: &'a ReMatcher<'a>,
-        operation: &'a Operation,
-        position: usize,
-        min: usize,
-        max: usize,
-        zero_groups: Option<Vec<usize>>,
-    ) -> Self {
-        Self {
-            matcher,
-            operation,
-            min,
-            max,
-            counter: 0,
-            position: Some(position),
-            zero_groups,
-            unbound: None,
+// A state's position, and what the groups hold when the program has
+// back-references (`ReMatcher::backref_snapshot`).
+type Key = (usize, Option<Box<[Option<usize>]>>);
+
+impl RepeatIterator<'_> {
+    fn key(&self, position: usize) -> Key {
+        (
+            position,
+            self.backrefs.then(|| self.matcher.backref_snapshot()),
+        )
+    }
+
+    // Whether the state `count` repetitions at `position` is worth entering.
+    fn enter(&mut self, position: usize, count: usize) -> bool {
+        if count < self.min {
+            // below the minimum, the number of repetitions still to do
+            // matters too
+            let key = (self.key(position), count);
+            return self.entered_below_min.insert(key);
         }
+        let key = self.key(position);
+        match self.entered.get(&key) {
+            Some(&fewest) if fewest <= count => false,
+            _ => {
+                self.entered.insert(key, count);
+                true
+            }
+        }
+    }
+
+    // Whether the current state's position should be reported now.
+    fn report(&mut self) -> Option<usize> {
+        let state = self.states.last_mut().unwrap();
+        state.reported = true;
+        if state.count < self.min {
+            return None;
+        }
+        let position = state.position;
+        let count = state.count;
+        let key = self.key(position);
+        if !self.reported.insert(key) {
+            return None;
+        }
+        if count == 0 {
+            if let Some(groups) = &self.zero_groups {
+                self.unbound = Some(unbind_groups(self.matcher, groups));
+            }
+        }
+        if let Some(record) = &mut self.record {
+            let captures = if self.matcher.tracks_captures() {
+                self.matcher.captures_since(self.mark)
+            } else {
+                Box::default()
+            };
+            record.push(RepeatResult {
+                position,
+                zero: count == 0,
+                captures,
+            });
+        }
+        Some(position)
     }
 }
 
-impl Iterator for ReluctantRepeatIterator<'_> {
+impl Iterator for RepeatIterator<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -327,38 +321,198 @@ impl Iterator for ReluctantRepeatIterator<'_> {
             self.matcher.undo_to(mark);
         }
         loop {
-            if let Some(position) = self.position {
-                let mut it = self.operation.matches_iter(self.matcher, position);
-                if let Some(position) = it.next() {
-                    self.counter += 1;
-                    if self.counter > self.max {
-                        self.position = None;
-                    } else {
-                        self.position = Some(position);
+            let Some(state) = self.states.last_mut() else {
+                if let Some(record) = self.record.take() {
+                    self.matcher
+                        .record_repeat_results(self.repeat, self.start, record);
+                }
+                return None;
+            };
+            if !self.greedy && !state.reported {
+                if let Some(position) = self.report() {
+                    return Some(position);
+                }
+                continue;
+            }
+            let state = self.states.last_mut().unwrap();
+            if state.count < self.max && !state.last {
+                let (position, count) = (state.position, state.count + 1);
+                let operand = state
+                    .operand
+                    .get_or_insert_with(|| self.operation.matches_iter(self.matcher, position));
+                match operand.next() {
+                    Some(end) if end == position && count > self.min => {
+                        // an empty repetition beyond the minimum: the last
+                        // one (see the type's comment). It reaches a
+                        // position already reached, so when only the answer
+                        // counts it adds nothing.
+                        if self.matcher.answer_only() {
+                            continue;
+                        }
+                        self.states.push(State {
+                            position: end,
+                            count,
+                            operand: None,
+                            reported: false,
+                            last: true,
+                        });
+                        continue;
                     }
-                } else if self.min == 0 && self.counter == 0 {
-                    // the operand does not match: zero repetitions
-                    self.counter += 1;
-                    if let Some(groups) = &self.zero_groups {
-                        self.unbound = Some(unbind_groups(self.matcher, groups));
+                    Some(end) => {
+                        if self.enter(end, count) {
+                            self.states.push(State {
+                                position: end,
+                                count,
+                                operand: None,
+                                reported: false,
+                                last: false,
+                            });
+                        }
+                        continue;
                     }
-                } else {
-                    // the operand does not match: no further repetition, and
-                    // no match at all if there are fewer than `min`
-                    self.position = None;
+                    None => {
+                        // exhausted: it has taken back its captures
+                        self.states.last_mut().unwrap().operand = None;
+                    }
                 }
             }
-            if self.counter >= self.min || self.position.is_none() {
-                break;
+            // the successors are done
+            if self.greedy && !self.states.last().unwrap().reported {
+                if let Some(position) = self.report() {
+                    return Some(position);
+                }
+            }
+            self.states.pop();
+        }
+    }
+}
+
+// What a repetition reported from a position the first time, reported again
+// (`ReMatcher::repeat_results`): each position with the captures the
+// repetition had made on the way to it.
+struct Replay<'a> {
+    matcher: &'a ReMatcher<'a>,
+    results: Rc<[RepeatResult]>,
+    next: usize,
+    // the capture log's length when it started
+    mark: usize,
+    zero_groups: Option<Vec<usize>>,
+}
+
+impl Iterator for Replay<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.matcher.undo_to(self.mark);
+        let result = self.results.get(self.next)?;
+        self.next += 1;
+        if result.zero {
+            if let Some(groups) = &self.zero_groups {
+                unbind_groups(self.matcher, groups);
             }
         }
-        self.position
+        for capture in result.captures.iter() {
+            self.matcher.restore_capture(capture);
+        }
+        Some(result.position)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::re_matcher::NO_REPEAT_RESULTS;
     use crate::Regex;
+
+    // Every operation, with and without the reuse of repetition results
+    // (`ReMatcher::repeat_results`): the same answers, the same captures.
+    #[test]
+    fn test_reused_results_change_nothing() {
+        // groups inside repetitions inside counted repetitions, where an
+        // enclosing repetition comes back to a position below its minimum
+        const PIECES: &[&str] = &[
+            "a",
+            "b",
+            "(a|)",
+            "(|b)",
+            "(a?)",
+            "(a*)",
+            "(b?|a)",
+            "((a|b)*)",
+            "(a(b)?)",
+            "(?:a|)",
+            "()",
+            "[ab]",
+            ".",
+            "(",
+            ")",
+            "|",
+            "((a)*b?){2}",
+            "(?:((a|b)*)|b){2,3}",
+            "((a*)(b*)){2}",
+            "(?:a|aa|((b)|bb)*c)",
+            "(?:a|((a|b)*))",
+            "((b|bb)*)",
+            "(?:aa|a)",
+            "(?:(x|(a))*b)",
+        ];
+        const QUANTS: &[&str] = &[
+            "", "", "?", "*", "+", "{2}", "{0,2}", "{1,2}", "{1,3}", "{2,3}", "*?", "+?", "{2,}?",
+        ];
+        const INPUTS: &[&str] = &[
+            "", "a", "ab", "aab", "abab", "baab", "aaaa", "abba", "aabbc", "abbcabc", "aabcbbc",
+            "xab", "aaab", "aabab",
+        ];
+        let mut seed: u64 = 20261017;
+        let mut next = |n: usize| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as usize) % n
+        };
+        let mut compiled = 0;
+        for _ in 0..12000 {
+            let pattern: String = (0..1 + next(5))
+                .map(|_| {
+                    format!(
+                        "{}{}",
+                        PIECES[next(PIECES.len())],
+                        QUANTS[next(QUANTS.len())]
+                    )
+                })
+                .collect();
+            let Ok(regex) = Regex::xpath(&pattern, "") else {
+                continue;
+            };
+            compiled += 1;
+            let count = pattern.matches('(').count() - pattern.matches("(?").count();
+            let groups = (1..=count.min(9))
+                .map(|i| format!("${i}"))
+                .collect::<Vec<_>>()
+                .join("|");
+            let template = format!("[{groups}]");
+            let run = |no_reuse: bool| {
+                NO_REPEAT_RESULTS.with(|no| no.set(no_reuse));
+                let out = INPUTS
+                    .iter()
+                    .map(|input| {
+                        (
+                            regex.is_match(input),
+                            regex.is_full_match(input),
+                            regex.replace_all(input, &template),
+                            regex.tokenize(input).map(|t| t.collect::<Vec<_>>()),
+                            regex
+                                .analyze(input)
+                                .map(|a| format!("{:?}", a.collect::<Vec<_>>())),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                NO_REPEAT_RESULTS.with(|no| no.set(false));
+                out
+            };
+            assert_eq!(run(false), run(true), "{pattern:?}");
+        }
+        assert!(compiled > 6000, "{compiled}");
+    }
 
     #[test]
     fn test_repeat_simple() {

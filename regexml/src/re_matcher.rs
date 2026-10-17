@@ -1,10 +1,13 @@
 use std::cell::RefCell;
+use std::rc::Rc;
+
+use ahash::{HashMap, HashMapExt};
+
+use crate::op_repeat::Repeat;
 
 #[cfg(test)]
 use crate::operation::Operation;
 use icu_casemap::CaseMapper;
-
-use crate::{history::History, op_repeat::Repeat};
 
 use crate::{
     operation::OperationControl,
@@ -26,6 +29,9 @@ pub(crate) struct ReMatcher<'a> {
     // except when only the yes/no answer or the overall match is wanted and
     // the program has no back-references, so that nothing reads them
     track_captures: bool,
+    // whether only the yes/no answer is wanted, so that neither the captures
+    // nor the order in which matches are found make a difference
+    answer_only: bool,
 }
 
 #[derive(Debug)]
@@ -34,10 +40,13 @@ pub(crate) struct State {
     pub(crate) end_backref: Vec<Option<usize>>,
     pub(crate) capture_state: CaptureState,
     pub(crate) anchored_match: bool,
-    pub(crate) history: History,
     // Undo log of the capture writes made during the current match attempt,
     // most recent last; see `ReMatcher::trail_mark` and `ReMatcher::undo_to`.
     pub(crate) trail: Vec<Undo>,
+    // What a repetition reported from a start position, in order, once it
+    // reported all of it; see `ReMatcher::repeat_results`.
+    repeat_results: HashMap<(usize, usize), Rc<[RepeatResult]>>,
+    repeat_results_size: usize,
 }
 
 impl State {
@@ -47,8 +56,9 @@ impl State {
             end_backref: vec![],
             capture_state: CaptureState::new(),
             anchored_match: false,
-            history: History::new(),
             trail: Vec::new(),
+            repeat_results: HashMap::new(),
+            repeat_results_size: 0,
         }
     }
 }
@@ -89,6 +99,7 @@ impl<'a> ReMatcher<'a> {
             state: RefCell::new(State::new()),
             case_mapper: CaseMapper::new(),
             track_captures: true,
+            answer_only: false,
         }
     }
 
@@ -102,9 +113,70 @@ impl<'a> ReMatcher<'a> {
         matcher
     }
 
+    /// A matcher for a caller that only asks whether there is a match
+    /// (`is_match`, `is_full_match`): like `new_without_captures`, and
+    /// moreover the order in which the matches are found does not matter.
+    pub(crate) fn new_for_answer(program: &'a ReProgram, search: &str) -> Self {
+        let mut matcher = Self::new_without_captures(program, search);
+        matcher.answer_only = !matcher.track_captures;
+        matcher
+    }
+
+    /// Whether only the yes/no answer is asked, with nothing that could read
+    /// a capture (`new_for_answer`).
+    pub(crate) fn answer_only(&self) -> bool {
+        self.answer_only
+    }
+
     /// Whether captures are kept correct on backtracking (see `Undo`).
     pub(crate) fn tracks_captures(&self) -> bool {
         self.track_captures
+    }
+
+    /// Whether a repetition's results may be kept for a second iteration
+    /// from the same position (`repeat_results`): without back-references,
+    /// what a repetition reports from a position — where it ends, and what
+    /// it captures on the way — depends on that position alone.
+    pub(crate) fn may_reuse_repeat_results(&self) -> bool {
+        #[cfg(test)]
+        if NO_REPEAT_RESULTS.with(|no| no.get()) {
+            return false;
+        }
+        self.program.optimization_flags & OPT_HASBACKREFS == 0
+    }
+
+    /// What the repetition `repeat` reported from `position`, if a complete
+    /// iteration recorded it (`may_reuse_repeat_results`).
+    pub(crate) fn repeat_results(
+        &self,
+        repeat: *const Repeat,
+        position: usize,
+    ) -> Option<Rc<[RepeatResult]>> {
+        self.state
+            .borrow()
+            .repeat_results
+            .get(&(repeat as usize, position))
+            .cloned()
+    }
+
+    /// Records the positions of a complete iteration of `repeat` from
+    /// `position`. At most `MAX_REPEAT_RESULTS` positions are kept in all, so
+    /// that a long input does not make the cache grow without bound.
+    pub(crate) fn record_repeat_results(
+        &self,
+        repeat: *const Repeat,
+        position: usize,
+        results: Vec<RepeatResult>,
+    ) {
+        const MAX_REPEAT_RESULTS: usize = 1 << 16;
+        let mut state = self.state.borrow_mut();
+        if state.repeat_results_size + results.len() > MAX_REPEAT_RESULTS {
+            return;
+        }
+        state.repeat_results_size += results.len();
+        state
+            .repeat_results
+            .insert((repeat as usize, position), results.into());
     }
 
     pub(crate) fn match_at(&self, i: usize, anchored: bool) -> bool {
@@ -458,6 +530,62 @@ impl<'a> ReMatcher<'a> {
 
     // state related
 
+    /// The groups written since `mark` (on the path being followed: the
+    /// writes of abandoned attempts have been taken back), with what they
+    /// hold now.
+    pub(crate) fn captures_since(&self, mark: usize) -> Box<[Capture]> {
+        let state = self.state.borrow();
+        let mut groups: Vec<usize> = state.trail[mark..]
+            .iter()
+            .filter_map(|undo| match undo {
+                Undo::Paren { group_nr, .. } => Some(*group_nr),
+                Undo::Backref { .. } => None,
+            })
+            .collect();
+        groups.sort_unstable();
+        groups.dedup();
+        let captures = &state.capture_state;
+        groups
+            .into_iter()
+            .map(|group_nr| Capture {
+                group_nr,
+                start: captures.startn.get(group_nr).copied().flatten(),
+                end: captures.endn.get(group_nr).copied().flatten(),
+            })
+            .collect()
+    }
+
+    /// Writes a group as `captures_since` reported it, logged like `capture`.
+    pub(crate) fn restore_capture(&self, capture: &Capture) {
+        match (capture.start, capture.end) {
+            (Some(start), Some(end)) => {
+                if capture.group_nr >= self.paren_count() {
+                    self.set_paren_count(capture.group_nr + 1);
+                }
+                self.capture(capture.group_nr, start, end);
+            }
+            _ => self.unbind(capture.group_nr),
+        }
+    }
+
+    /// What the groups that back-references refer to hold, as one slice:
+    /// everything matching reads of the captures.
+    pub(crate) fn backref_snapshot(&self) -> Box<[Option<usize>]> {
+        let state = self.state.borrow();
+        self.program
+            .back_referenced_groups
+            .iter()
+            .flat_map(|&group_nr| {
+                // the arrays are made by `match_at`; the preconditions run
+                // before it
+                [
+                    state.start_backref.get(group_nr).copied().flatten(),
+                    state.end_backref.get(group_nr).copied().flatten(),
+                ]
+            })
+            .collect()
+    }
+
     pub(crate) fn start_backref(&self, i: usize) -> Option<usize> {
         self.state.borrow().start_backref[i]
     }
@@ -468,13 +596,6 @@ impl<'a> ReMatcher<'a> {
 
     pub(crate) fn anchored_match(&self) -> bool {
         self.state.borrow().anchored_match
-    }
-
-    pub(crate) fn is_duplicate_zero_length_match(&self, repeat: &Repeat, position: usize) -> bool {
-        self.state
-            .borrow_mut()
-            .history
-            .is_duplicate_zero_length_match(repeat, position)
     }
 
     // capture state related
@@ -627,6 +748,31 @@ impl<'a> ReMatcher<'a> {
             }
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    // Turns `ReMatcher::repeat_results` off, so that tests can compare.
+    pub(crate) static NO_REPEAT_RESULTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A position a repetition reported, with the groups it had written on the
+/// way to it (`ReMatcher::captures_since`) when captures are kept, and
+/// whether it was the zero-repetitions result (which leaves the operand's
+/// groups unmatched).
+#[derive(Debug)]
+pub(crate) struct RepeatResult {
+    pub(crate) position: usize,
+    pub(crate) zero: bool,
+    pub(crate) captures: Box<[Capture]>,
+}
+
+/// A group and what it holds.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Capture {
+    pub(crate) group_nr: usize,
+    pub(crate) start: Option<usize>,
+    pub(crate) end: Option<usize>,
 }
 
 #[derive(Debug)]

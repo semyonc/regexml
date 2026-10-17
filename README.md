@@ -48,6 +48,9 @@ See [`regexml/CHANGELOG.md`](regexml/CHANGELOG.md) for the details and the spec 
 - A lifetime made explicit on `Regex::matcher` (a compiler warning).
 - **A counted repetition of an operand that can match the empty string keeps its upper bound** (XSD 1.1 Part 2
   §G.2): `^(a|){2}$` no longer matches "aaaa", so such an XSD pattern no longer accepts values longer than it allows.
+- **A repetition tries every way of matching before it fails** (F&O 3.1 §5.6.1.2): `^([ab]*)+b$` matches "ab",
+  `(a|ab)+?c` finds "abc", and repetitions nested in each other no longer take exponential time in the length of
+  the input (`(\w+\s?)*` over 200 words and "!": more than a minute → under a millisecond).
 - **A reluctant repetition of an empty group or an anchor no longer loops** (`^(?:()+?)$` on "a").
 - **The `x` flag removes exactly #x9, #xA, #xD and #x20** (F&O 3.1 §5.6.2), no longer the form feed #xC as well.
 - **Whole-string matching**, `Regex::is_full_match`: the matching operation of an XML Schema `pattern` facet, whose

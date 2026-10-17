@@ -93,6 +93,7 @@ impl OperationControl for Sequence {
                                     &repeated_operation,
                                     next_operation,
                                     flags.is_case_independent(),
+                                    flags.is_multi_line(),
                                     !repeat_operation.greedy(),
                                 ) {
                                     return Operation::from(UnambiguousRepeat::new(

@@ -18,7 +18,7 @@ use crate::{
     op_reluctant_fixed::ReluctantFixed,
     op_repeat::Repeat,
     op_sequence::Sequence,
-    operation::{Operation, OperationControl, MATCHES_ZLS_ANYWHERE},
+    operation::{Operation, OperationControl, MATCHES_ZLS_ANYWHERE, MATCHES_ZLS_NEVER},
     re_flags::{Language, ReFlags},
     re_program::{ReProgram, OPT_HASBACKREFS},
 };
@@ -75,6 +75,8 @@ pub(crate) struct ReCompiler {
 
     captures: HashSet<usize>,
     has_back_references: bool,
+    // the groups back-references refer to
+    back_referenced_groups: Vec<usize>,
 
     // current nesting of groups and character classes
     nesting_depth: usize,
@@ -234,6 +236,7 @@ impl ReCompiler {
             bracket_max: 0,
             captures: HashSet::new(),
             has_back_references: false,
+            back_referenced_groups: Vec::new(),
             nesting_depth: 0,
             re_flags,
         }
@@ -514,6 +517,9 @@ impl ReCompiler {
                     )));
                 }
                 self.has_back_references = true;
+                if !self.back_referenced_groups.contains(&back_ref) {
+                    self.back_referenced_groups.push(back_ref);
+                }
                 Ok(CharacterClassOrBackReference::BackReference(back_ref))
             }
             escape_char => Err(Error::syntax(format!(
@@ -924,16 +930,6 @@ impl ReCompiler {
                         // '*' and '+' are equivalent
                         quantifier_type = Some('*');
                     }
-                    Some('{') => {
-                        // XSD 1.1 Part 2 §G.2: S{n,m} denotes the strings of
-                        // L(S)^k for n <= k <= m. When S matches the empty
-                        // string, any shorter count can be made up to n with
-                        // empty repetitions, so the lower bound adds nothing;
-                        // the upper bound still counts. (This was turned into
-                        // `*` as in the Java original, which dropped the upper
-                        // bound: `(a|){2}` matched "aaaa".)
-                        self.bracket_min = 0;
-                    }
                     _ => {}
                 }
             }
@@ -1239,6 +1235,7 @@ impl ReCompiler {
             if self.has_back_references {
                 program.optimization_flags |= OPT_HASBACKREFS;
             }
+            program.back_referenced_groups = self.back_referenced_groups;
             Ok(program)
         }
     }
@@ -1247,18 +1244,29 @@ impl ReCompiler {
         op0: &Operation,
         op1: &Operation,
         case_blind: bool,
+        multi_line: bool,
         reluctant: bool,
     ) -> bool {
         if matches!(op1, Operation::EndProgram(_)) {
             return !reluctant;
         }
-        if matches!(op1, Operation::Bol(_)) || matches!(op1, Operation::Eol(_)) {
-            return true;
+        // `^` after the repetition holds at the start (or, with `m`, after a
+        // newline): fewer repetitions may reach a position where it holds,
+        // so it is no reason to take as many as possible (`a*^a` on "a").
+        if matches!(op1, Operation::Bol(_)) {
+            return false;
         }
-        if let Some(repeat_operation) = op1.repeat_operation() {
-            if repeat_operation.min() == 0 {
-                return false;
-            }
+        // `$` holds at the end (or, with `m`, before a newline): fewer
+        // repetitions of an operand that cannot match a newline end before a
+        // character that is not one, where it does not hold.
+        if matches!(op1, Operation::Eol(_)) {
+            return !multi_line || !op0.get_initial_character_class(case_blind).contains('\n');
+        }
+        // A next operation that can match the empty string lets whatever
+        // follows it start right after the repetition, and that is not looked
+        // at here (`a*(?:(?:xy|x)*|z)a` on "aa").
+        if op1.matches_empty_string() != MATCHES_ZLS_NEVER {
+            return false;
         }
         let c0 = op0.get_initial_character_class(case_blind);
         let c1 = op1.get_initial_character_class(case_blind);

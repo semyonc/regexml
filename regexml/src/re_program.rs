@@ -27,6 +27,9 @@ pub(crate) struct ReProgram {
     pub(crate) optimization_flags: u32,
     pub(crate) max_parens: Option<usize>,
     pub(crate) backtracking_limit: Option<usize>,
+    // the groups the back-references refer to, the only captures matching
+    // reads (`ReMatcher::backref_snapshot`)
+    pub(crate) back_referenced_groups: Vec<usize>,
 }
 
 impl ReProgram {
@@ -70,6 +73,7 @@ impl ReProgram {
             max_parens,
             minimum_length,
             backtracking_limit: None,
+            back_referenced_groups: Vec::new(),
         };
         if let Some(precondition_operation) = precondition_operation {
             r.add_precondition(precondition_operation, None, 0);

@@ -23,7 +23,7 @@ impl Regex {
         let re_compiler = ReCompiler::new(pattern, re_flags);
         let re_program = re_compiler.compile()?;
         // we need to check if the regex matches the empty string
-        let mut matcher = ReMatcher::new_without_captures(&re_program, "");
+        let mut matcher = ReMatcher::new_for_answer(&re_program, "");
         let matches_empty_string = matcher.is_match();
         Ok(Self {
             re_program,
@@ -105,7 +105,7 @@ impl Regex {
 
     /// Returns `true` if the argument matches this regular expression.
     pub fn is_match(&self, haystack: &str) -> bool {
-        let mut matcher = ReMatcher::new_without_captures(&self.re_program, haystack);
+        let mut matcher = ReMatcher::new_for_answer(&self.re_program, haystack);
         matcher.is_match()
     }
 
@@ -135,8 +135,8 @@ impl Regex {
     /// ```
     pub fn is_full_match(&self, haystack: &str) -> bool {
         // Captures cannot change the answer unless there are back-references,
-        // which `new_without_captures` keeps track of.
-        let mut matcher = ReMatcher::new_without_captures(&self.re_program, haystack);
+        // which `new_for_answer` keeps track of.
+        let mut matcher = ReMatcher::new_for_answer(&self.re_program, haystack);
         matcher.is_full_match()
     }
 
