@@ -49,11 +49,12 @@ See [`regexml/CHANGELOG.md`](regexml/CHANGELOG.md) for the details and the spec 
 - **Whole-string matching**, `Regex::is_full_match`: the matching operation of an XML Schema `pattern` facet, whose
   regular expressions are implicitly anchored "at the head and tail" (XML Schema 1.1 Part 2 appendix G). By
   [helping-kaiser](https://github.com/helping-kaiser), from Paligo/regexml#15, with more tests added here.
-<!-- draft: update when F2/F3 land -->
 - **An XPath 2.0 dialect**, `Regex::xpath20`: the regular expressions of XQuery 1.0 and XPath 2.0 Functions and
   Operators (Second Edition) §7.6.1, which have no non-capturing groups `(?:…)` and only the flags `s`, `m`, `i` and
-  `x` (§7.6.1.1), and in which `.` without the `s` flag excludes only the newline #xA. `Regex::xpath` keeps the
-  XPath 3.1 rules.
+  `x` (§7.6.1.1: "If there are characters present that are not defined here as flags, then an error is raised"), and
+  in which `.` without the `s` flag "matches any character except a newline (#x0A) character" — F&O 3.1 §5.6.2
+  excludes the carriage return #xD as well, and `Regex::xpath` keeps that rule.
+<!-- draft: update when F3 lands -->
 - **Error kinds**, `Error::kind`: a classification of compile errors (invalid flags, syntax, too deep nesting, an
   unknown block name, …) that callers can match on instead of the error's text. The existing `Error` variants are
   unchanged.

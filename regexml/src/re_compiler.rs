@@ -241,7 +241,9 @@ impl ReCompiler {
                 Ok(CharacterClassBuilder::from_char(escape_char).into())
             }
             '$' => match self.re_flags.language() {
-                Language::XPath => Ok(CharacterClassBuilder::from_char('$').into()),
+                Language::XPath | Language::XPath20 => {
+                    Ok(CharacterClassBuilder::from_char('$').into())
+                }
                 Language::Xsd => Err(Error::syntax("In XSD, '$' must not be escaped")),
             },
             's' => Ok(escape_s.into()),
@@ -365,7 +367,7 @@ impl ReCompiler {
                         "Backreferences not allowed within character classes",
                     ));
                 }
-                if self.re_flags.language() != Language::XPath {
+                if !self.re_flags.language().is_xpath() {
                     return Err(Error::syntax("digit not allowed after \\"));
                 }
                 let mut back_ref = (escape_char as usize) - ('0' as usize);
@@ -652,7 +654,7 @@ impl ReCompiler {
                     }
                 }
                 c => {
-                    if (c == '^' || c == '$') && self.re_flags.language() == Language::XPath {
+                    if (c == '^' || c == '$') && self.re_flags.language().is_xpath() {
                         break;
                     }
                     ub.push(self.pattern[self.idx]);
@@ -673,13 +675,13 @@ impl ReCompiler {
     fn parse_terminal(&mut self, flags: &[u32]) -> Result<Operation, Error> {
         match self.pattern[self.idx] {
             '$' => {
-                if self.re_flags.language() == Language::XPath {
+                if self.re_flags.language().is_xpath() {
                     self.idx += 1;
                     return Ok(Operation::from(Eol));
                 }
             }
             '^' => {
-                if self.re_flags.language() == Language::XPath {
+                if self.re_flags.language().is_xpath() {
                     self.idx += 1;
                     return Ok(Operation::from(Bol));
                 }
@@ -692,7 +694,13 @@ impl ReCompiler {
                 } else {
                     let mut inv_list = CodePointInversionListBuilder::new();
                     inv_list.add_char('\n');
-                    inv_list.add_char('\r');
+                    // XSD 1.1 Part 2 §G.4.2.5 and F&O 3.1 §5.6.2 exclude #xD
+                    // as well; F&O 1.0 §7.6.1.1: "If the s flag is not
+                    // specified, the meta-character . matches any character
+                    // except a newline (#x0A) character."
+                    if self.re_flags.language() != Language::XPath20 {
+                        inv_list.add_char('\r');
+                    }
                     inv_list.complement();
                     let inv_list = inv_list.build();
                     CharClass::new(CharacterClass::new(inv_list))
@@ -904,6 +912,17 @@ impl ReCompiler {
         let close_parens = self.capturing_open_paren_count;
         let mut capturing = true;
         if (compiler_flags[0] & NODE_TOPLEVEL) == 0 && self.pattern[self.idx] == '(' {
+            // In the XPath 2.0 grammar `(` always opens a capturing group,
+            // followed by a branch, and `?` is a quantifier that needs an atom
+            // before it: nothing may start with `(?`. Non-capturing groups
+            // came with F&O 3.0.
+            if self.re_flags.language() == Language::XPath20
+                && self.pattern.get(self.idx + 1) == Some(&'?')
+            {
+                return Err(Error::syntax(
+                    "'(?' is not allowed in XPath 2.0: there are no non-capturing groups",
+                ));
+            }
             // if it's a cluster (rather than a proper subexpression ie with backrefs)
             if (self.idx + 2) < self.len
                 && self.pattern[self.idx + 1] == '?'
@@ -1020,6 +1039,16 @@ impl ReCompiler {
                 let mut sb = Vec::new();
                 let mut nesting = 0;
                 let mut escaped = false;
+                // F&O 1.0 §7.6.1.1 and F&O 3.1 §5.6.2: "whitespace characters
+                // (#x9, #xA, #xD and #x20) in the regular expression are
+                // removed"; the other dialects also remove a form feed (#xC)
+                let is_removed = |ch: char| {
+                    if self.re_flags.language() == Language::XPath20 {
+                        matches!(ch, '\u{9}' | '\u{A}' | '\u{D}' | ' ')
+                    } else {
+                        ch.is_ascii_whitespace()
+                    }
+                };
                 for ch in self.pattern.iter() {
                     match ch {
                         '\\' if !escaped => {
@@ -1036,7 +1065,7 @@ impl ReCompiler {
                         }
                         _ => {
                             // TODO: wrong whitespace
-                            if nesting == 0 && ch.is_ascii_whitespace() {
+                            if nesting == 0 && is_removed(*ch) {
                                 // no action
                             } else {
                                 escaped = false;

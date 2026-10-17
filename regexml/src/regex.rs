@@ -43,6 +43,45 @@ impl Regex {
         Self::new(re, flags, Language::XPath)
     }
 
+    /// Create a regular expression from a string, using XPath 2.0 rules.
+    ///
+    /// This is the dialect of XQuery 1.0 and XPath 2.0 Functions and
+    /// Operators (Second Edition), §7.6.1: the one of [`Regex::xpath`]
+    /// without what F&O 3.0 added to it.
+    ///
+    /// - The flags are `s`, `m`, `i` and `x`, in any order and repeated
+    ///   (§7.6.1.1: "If there are characters present that are not defined here
+    ///   as flags, then an error is raised \[err:FORX0001\]"). Any other flag —
+    ///   `q`, or a `;` with the flags after it — is [`Error::InvalidFlags`].
+    /// - There are no non-capturing groups: a `(` outside a character class
+    ///   always opens a capturing group, and a `?` after it would be a
+    ///   quantifier with nothing to apply to, so a pattern in which an
+    ///   unescaped `(` outside a class is followed by `?` — after the
+    ///   whitespace removal of the `x` flag — is an [`Error::Syntax`]
+    ///   (FORX0002).
+    /// - Without the `s` flag, `.` matches every character except the newline
+    ///   #xA (§7.6.1.1: "If the s flag is not specified, the meta-character .
+    ///   matches any character except a newline (#x0A) character"), where the
+    ///   later rule of [`Regex::xpath`] also excludes the carriage return #xD.
+    /// - The `x` flag removes exactly the four whitespace characters #x9, #xA,
+    ///   #xD and #x20 outside character classes.
+    ///
+    /// Flags are checked before the pattern, so a call with both wrong reports
+    /// the flags. An unknown block name such as `\p{IsUnknown}` is a syntax
+    /// error, with no `;k` to change that.
+    ///
+    /// ```
+    /// use regexml_fork::{Error, Regex};
+    ///
+    /// assert!(matches!(Regex::xpath20("(?:a)", ""), Err(Error::Syntax(_))));
+    /// assert!(matches!(Regex::xpath20("a", "q"), Err(Error::InvalidFlags(_))));
+    /// assert!(Regex::xpath20("^a.b$", "").unwrap().is_match("a\rb"));
+    /// assert!(!Regex::xpath("^a.b$", "").unwrap().is_match("a\rb"));
+    /// ```
+    pub fn xpath20(re: &str, flags: &str) -> Result<Self, Error> {
+        Self::new(re, flags, Language::XPath20)
+    }
+
     /// Create a regular expression from a string, using XML Schema 1.1 rules.
     ///
     /// A block escape with a block name that is not recognized, such as

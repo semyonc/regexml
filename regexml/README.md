@@ -57,14 +57,19 @@ assert!(!re.is_full_match("AB12x"));
 
 // `;k` accepts unknown block names (XSD 1.1 Part 2 §G.4.2.4).
 assert!(Regex::xsd(r"\p{IsNoSuchBlock}", ";k").is_ok());
+
+// The XPath 2.0 dialect (F&O 1.0 §7.6.1): no `(?:…)`, no `q` flag.
+assert!(Regex::xpath20("(?:a)", "").is_err());
+assert!(Regex::xpath20("a", "q").is_err());
+assert!(Regex::xpath("(?:a)", "q").is_ok());
 ```
 
 Behaviour differs from `regexml` 0.2.2 only where 0.2.2 was wrong: captured groups after backtracking, patterns
 nested more than 64 levels deep (now a syntax error), unknown block names with `;k`, and reluctant repetitions that
 used to loop. The additions change nothing that was there before: `Regex::is_full_match` (whole-string matching,
-contributed by [helping-kaiser](https://github.com/helping-kaiser) in Paligo/regexml#15)<!-- draft: update when
-F2/F3 land -->, `Regex::xpath20` (the XPath 2.0 dialect of F&O 1.0 §7.6.1: no `(?:…)`, the flags `s`, `m`, `i`
-and `x` only, and `.` excluding only #xA) and `Error::kind` (a classification of errors to match on instead of
+contributed by [helping-kaiser](https://github.com/helping-kaiser) in Paligo/regexml#15), `Regex::xpath20` (the
+XPath 2.0 dialect of F&O 1.0 §7.6.1: no `(?:…)`, the flags `s`, `m`, `i` and `x` only, and `.` excluding only
+#xA)<!-- draft: update when F3 lands --> and `Error::kind` (a classification of errors to match on instead of
 their text)<!-- end draft -->. The
 [CHANGELOG](https://github.com/semyonc/regexml/blob/fork/regexml/CHANGELOG.md) lists each change.
 
