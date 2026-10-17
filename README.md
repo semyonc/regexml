@@ -78,6 +78,9 @@ your option ([`LICENSE-APACHE`](LICENSE-APACHE), [`LICENSE-MPL2`](LICENSE-MPL2))
   Saxon code remain subject to the MPL-2.0; their source is this repository and the published crate.
 - Third-party material keeps its own terms, also listed in `COPYRIGHT`: the Unicode `Blocks.txt` data (Unicode
   License V3) and the tests ported from the W3C qt3 test suite (W3C Software and Document License).
+- The published crate carries byte-identical copies of `LICENSE-APACHE`, `LICENSE-MPL2`, `COPYRIGHT` and
+  `CREDITS.txt` (in `regexml/`, the package's directory), so that every copy of the package has the licences and
+  notices; regexml 0.2.2's package had none of them.
 - **This is a modified version of regexml.** Files changed by the fork are identified by this repository's git
   history (every change since the fork point `b7af9de`, regexml v0.2.2) and summarised in the CHANGELOG.
 - The name "regexml" is used only to identify the project this fork derives from; neither license grants any right

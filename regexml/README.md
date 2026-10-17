@@ -108,7 +108,8 @@ The Java code was translated by hand into Rust by the regexml project. There are
 Apache License 2.0 **or** Mozilla Public License 2.0, at your option — the same terms as `regexml`. The engine is a
 port of Saxon's regular-expression engine (Copyright © 2018–2024 Saxonica Limited, MPL-2.0), which extends Apache
 Jakarta Regexp (Apache-2.0); files derived from the Saxon code remain subject to the MPL-2.0. This is a modified
-version of `regexml`: the changes are recorded in the repository's history and CHANGELOG. The full notices — including
-the Unicode data license and the W3C test-suite license — are in the
+version of `regexml`: the changes are recorded in the repository's history and CHANGELOG. The package carries the
+licence texts (`LICENSE-APACHE`, `LICENSE-MPL2`) and the full notices — including the Unicode data license and the
+W3C test-suite license — in the
 [`COPYRIGHT`](https://github.com/semyonc/regexml/blob/fork/COPYRIGHT) and
 [`CREDITS.txt`](https://github.com/semyonc/regexml/blob/fork/CREDITS.txt) files, kept unchanged from `regexml`.

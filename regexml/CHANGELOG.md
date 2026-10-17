@@ -122,6 +122,8 @@ Paligo/regexml#15, by its author. Compiling the crate needs Rust 1.79 or newer (
   `mismatched_lifetime_syntaxes` warning). (`5c028bf`)
 - The crate-private `Language::XSD` is `Language::Xsd` (clippy `upper_case_acronyms`). (`3fc4ec1`)
 - Package metadata, README and licence notices of the fork. (`bf48f9f`)
+- The package carries `LICENSE-APACHE`, `LICENSE-MPL2`, `COPYRIGHT` and `CREDITS.txt`, byte-identical copies of the
+  files at the repository root; regexml 0.2.2's package carried none of them. (`licence files` commit)
 
 ### Known limitations
 
