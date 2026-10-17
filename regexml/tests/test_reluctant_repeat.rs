@@ -67,3 +67,32 @@ fn test_reluctant_repeat_replace_tokenize_analyze() {
     assert!(matches!(&entries[1], AnalyzeEntry::Match(_)));
     assert!(matches!(&entries[2], AnalyzeEntry::NonMatch(s) if s == "y"));
 }
+
+fn is_full_match(re: &'static str, haystack: &'static str) -> bool {
+    within_seconds(10, move || {
+        Regex::xpath(re, "").unwrap().is_full_match(haystack)
+    })
+}
+
+// A reluctant repetition of an operand that only matches the empty string
+// (an empty group, an anchor) offered the same position again for every
+// further repetition, up to `usize::MAX` of them, when what follows failed.
+// The expected values agree with Python's `re`.
+#[test]
+fn test_reluctant_repeat_of_an_empty_operand_finishes() {
+    // the probe
+    assert!(!is_match("^(?:()+?)$", "a"));
+    assert!(!is_full_match("()+?", "a"));
+    assert!(!is_full_match("()*?", "a"));
+    assert!(!is_full_match("(){2}?", "a"));
+    assert!(!is_match("(?:){1,2}?a", ""));
+    assert!(!is_match("(){1,2}?a", ""));
+    assert!(is_match("(){1,2}?a", "a"));
+    assert!(!is_match("^a($)+?b", "ab"));
+    assert!(is_match("^a($)+?$", "a"));
+    assert!(is_match("^a(^)*?b", "ab"));
+    assert!(is_match("(){3}?b", "ab"));
+    // nested in a reluctant repetition that has to go on
+    assert!(is_match("^(()+?a)+?$", "aa"));
+    assert!(is_match("^(()*?a)*?b$", "aab"));
+}

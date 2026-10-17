@@ -1001,12 +1001,25 @@ impl ReCompiler {
                 Ok(Operation::from(Repeat::new(ret, min, max, true)))
             }
         } else if let Some(match_length) = ret.get_match_length() {
-            Ok(Operation::from(ReluctantFixed::new(
-                ret,
-                min,
-                max,
-                match_length,
-            )))
+            if match_length > 0 {
+                Ok(Operation::from(ReluctantFixed::new(
+                    ret,
+                    min,
+                    max,
+                    match_length,
+                )))
+            } else if min == 0 {
+                // as in the greedy case: zero repetitions match all that any
+                // repetition of an operand that only matches the empty string
+                // can match
+                Ok(Operation::from(Nothing))
+            } else {
+                // the operand once. A `ReluctantFixed` of length 0 offered the
+                // same position again for every further repetition, up to
+                // `max` (`usize::MAX` for `+?`) of them, so a pattern such as
+                // `^(?:()+?)$` never finished on "a".
+                Ok(ret)
+            }
         } else {
             Ok(Operation::from(Repeat::new(ret, min, max, false)))
         }

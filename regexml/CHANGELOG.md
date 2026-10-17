@@ -46,6 +46,11 @@ Paligo/regexml#15, by its author. Compiling the crate needs Rust 1.79 or newer (
   accepted any number of digits. Now only the lower bound is dropped (empty repetitions can always make it up). And a
   repetition of an operand that only matches the empty string (an anchor or an empty group) with a minimum of one or
   more is the operand once instead of nothing: `a($)+b` no longer matches "ab". (`counted repetition` commit)
+- **A reluctant repetition of an operand that only matches the empty string finishes.** `()+?`, `(){2}?`, `($)+?`
+  compiled to a fixed-length reluctant repetition of length 0, which offered the same position again for every
+  further repetition, up to `usize::MAX` of them for `+?`, whenever what followed failed: `^(?:()+?)$` never finished
+  on "a". It is now the operand once (or nothing, with a minimum of zero), as in the greedy case. (`reluctant empty
+  operand` commit)
 - **The `x` flag no longer removes a form feed (#xC).** F&O 3.1 §5.6.2: "whitespace characters (#x9, #xA, #xD and
   #x20) in the regular expression are removed prior to matching with one exception: whitespace characters within
   character class expressions (charClassExpr) are not removed" (F&O 1.0 §7.6.1.1 says the same). The engine removed
