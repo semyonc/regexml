@@ -68,14 +68,20 @@ Paligo/regexml#15, by its author. The minimum supported Rust version is 1.85 (`r
   also in a group) the states need no successors, since the first repetition reached all they could (for greedy
   operands also where captures and the order of matches count, with the empty last repetition's captures made
   directly); and with back-references a state is told apart from another at its position only by the captures it
-  passes on (back-referenced groups inside the operand that a repetition does not always write). Exponential searches
-  became polynomial (optimized build, against 0.2.2): `(a+)+b`, `(a|aa)*b`, `(\w+\s?)*!`, `(a*?)*b` time out on 0.2.2
-  at 100 characters and take 0.1–530 ms at 3 200; the rest of the family keeps 0.2.2's order — linear for a
-  whole-string match, quadratic for a search over every start position — at 0.24 to 2.6 times 0.2.2's time at 3 200
-  characters (`(a*)*b` searched in 3 200 a's, "c", "b": 0.38 s on 0.2.2, 0.18 s here). The exception is a
-  back-reference to a group in such a repetition (see the known limitations). A whole-string match now checks, as a
-  search does, the input's length and what every match needs before it tries the start. (`45a0c79`,
-  `d9d7811`)
+  passes on (back-referenced groups inside the operand that a repetition does not always write). Where only the
+  answer counts (`is_match`, `is_full_match`), a fixed-length repetition in the operand of a repetition that is not
+  nested (with only sequences, choices and groups in between) stops where it has been before with as many
+  repetitions, since what follows it is the same each time: without that, `(a*b*)*c` over a run of a's it cannot
+  match through went through the rest of the run again from every position in it. Exponential searches became
+  polynomial (optimized build, against 0.2.2): `(a+)+b`, `(a|aa)*b`, `(\w+\s?)*!`, `(a*?)*b` and the others that
+  time out on 0.2.2 at 100 or 200 characters take 0.1 ms to 1.2 s at 3 200. The rest of the family grows no faster
+  than on 0.2.2 — linear for a whole-string match and, where only the answer counts, for a search too (but for a
+  repetition nested in the operand, as in `((a*)*)*b`: quadratic, as on 0.2.2); quadratic for `replace_all` and
+  `tokenize` over every start position — at 0.001 to 2.0 times 0.2.2's time at 3 200 characters (`(a*)*b` searched
+  in 3 200 a's, "c", "b": 0.39 s on 0.2.2, 1.9 ms here; `(a*b*)*c` matched as a whole against 3 200 a's and "cb":
+  0.67 ms on 0.2.2 and here). The exceptions are listed under "Known limitations". A whole-string match now
+  checks, as a search does, the input's length and what every match needs before it tries the start. (`45a0c79`,
+  `d9d7811`, `eb603cb`, `95acd7f`)
 - **What follows `^` in multi-line mode is not tied to the start of the string.** The checks a search makes before
   it tries a start position (the operations every match needs) placed an operation after `^` at position 0 even in
   multi-line mode, where `^` also matches after a newline (F&O 3.1 §5.6.2: "^ matches the start of any line"):
@@ -142,9 +148,15 @@ Paligo/regexml#15, by its author. The minimum supported Rust version is 1.85 (`r
 ### Known limitations
 
 - A back-reference to a group inside a repetition whose operand matches many lengths, as in `(a*)*\1b`, makes the
-  search tell apart every substring the group can have captured: quadratic work for each start position, a little
-  more with the comparisons (3 200 characters: 3.3 s for a whole-string match, 4.5 s for a search), where regexml
-  0.2.2 cut the search short (0.25 s / 0.4 s, with wrong answers elsewhere, as for `^(?:(a)b|a(b))(x|xy)*\2$`).
+  search tell apart every substring the group can have captured: over 3 200 a's and "cb", 3.1 s for a whole-string
+  match and 4.8 s for a search, against 0.25 ms and 0.40 s on regexml 0.2.2, whose speed there comes from the
+  counter that cut the search short and gave wrong answers elsewhere (`^(?:(a)b|a(b))(x|xy)*\2$` rejected "abb").
+  XSD patterns have no back-references, so only the XPath functions meet it.
+- `replace_all`, `tokenize` and `analyze`, which keep captures and the order of matches, take time quadratic in the
+  length of a run that an expression which can only match at the start cannot match through, when a repetition in
+  it has an operand that is not closed under repetition but has a repetition inside: `^(?:(a*b*)*c)$` over 3 200
+  a's and "cb", 0.34 s against 0.67 ms on 0.2.2, whose counter gave up after four results at the same position
+  (`is_match` and `is_full_match` take 0.6 ms). Without the `^`, over every start position, both are quadratic.
 - Character class subtraction and union are quadratic in ICU's set builder.
 
 ## [0.2.2](https://github.com/Paligo/regexml/compare/regexml-v0.2.1...regexml-v0.2.2) - 2026-04-28
