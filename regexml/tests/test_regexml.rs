@@ -1,4 +1,4 @@
-use regexml::Regex;
+use regexml_fork::Regex;
 
 #[test]
 fn test_is_match_simple() {

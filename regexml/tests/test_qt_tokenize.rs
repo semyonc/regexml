@@ -1,7 +1,7 @@
 // these test cases are a transliteration of test cases in tokenize.xml
 // part of the qt3 test suite
 
-use regexml::{Error, Regex};
+use regexml_fork::{Error, Regex};
 
 // Evaluation of tokenize function where pattern matches the zero length
 // string. Given on example 3 for this function in the Func and Ops specs.

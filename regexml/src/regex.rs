@@ -52,7 +52,7 @@ impl Regex {
     /// Saxon:
     ///
     /// ```
-    /// use regexml::Regex;
+    /// use regexml_fork::Regex;
     ///
     /// assert!(Regex::xsd(r"\p{IsUnknown}", "").is_err());
     /// let regex = Regex::xsd(r"\p{IsUnknown}", ";k").unwrap();
@@ -85,7 +85,7 @@ impl Regex {
     /// §G.3); in the XPath dialect they keep their meaning as anchors.
     ///
     /// ```
-    /// use regexml::Regex;
+    /// use regexml_fork::Regex;
     ///
     /// let regex = Regex::xsd("a|ab", "").unwrap();
     /// assert!(regex.is_full_match("ab"));

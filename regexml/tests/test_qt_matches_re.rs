@@ -1,7 +1,7 @@
 // I haven't translated all the tests from the qt3 test runner,
 // only those which are failing to debug them.
 
-use regexml::Regex;
+use regexml_fork::Regex;
 
 #[test]
 fn test_re00036() {

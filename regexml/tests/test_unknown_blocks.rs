@@ -4,7 +4,7 @@
 // that; by default an unknown block name is an error, as F&O 3.1 §5.6.1.5
 // requires for XPath.
 
-use regexml::{Error, Regex};
+use regexml_fork::{Error, Regex};
 
 // single characters, so that a match anywhere is a match of the whole string
 const SAMPLES: &[&str] = &["a", "Z", "0", " ", "\n", "-", "é", "€", "中", "\u{10FFFF}"];

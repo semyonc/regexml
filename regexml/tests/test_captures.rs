@@ -8,7 +8,7 @@
 // the path that did match. The expected values below agree with Python's
 // `re`, Perl and Java, except where noted.
 
-use regexml::{AnalyzeEntry, MatchEntry, Regex};
+use regexml_fork::{AnalyzeEntry, MatchEntry, Regex};
 
 /// A match span and the `(group number, start, end)` of every group reported
 /// for it, in character offsets.

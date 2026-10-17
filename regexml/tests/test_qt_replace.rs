@@ -1,7 +1,7 @@
 // these test cases are a transliteration of test cases in replace.xml
 // part of the qt3 test suite
 
-use regexml::{Error, Regex};
+use regexml_fork::{Error, Regex};
 
 // Evaluation of replace function with replacement = "*" as an example 1 for
 // this function.

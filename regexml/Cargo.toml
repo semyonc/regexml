@@ -1,12 +1,12 @@
 [package]
-name = "regexml"
-version = "0.2.2"
+name = "regexml-fork"
+version = "0.3.0"
 edition = "2021"
 authors = ["Regexml contributors"]
 license = "Apache-2.0 OR MPL-2.0"
-description = "XPath compatible regex engine"
-documentation = "https://docs.rs/regexml"
-repository = "https://github.com/Paligo/regexml"
+description = "Unofficial, maintained fork of regexml: an XML Schema 1.1 / XPath compliant regular-expression engine"
+documentation = "https://docs.rs/regexml-fork"
+repository = "https://github.com/semyonc/regexml"
 readme = "README.md"
 keywords = ["regex", "xml", "xpath", "xml-schema"]
 categories = ["text-processing"]

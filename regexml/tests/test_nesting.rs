@@ -1,4 +1,4 @@
-use regexml::{Error, Regex};
+use regexml_fork::{Error, Regex};
 
 // The deepest nesting of groups and character classes the compiler accepts.
 const LIMIT: usize = 64;

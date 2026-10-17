@@ -1,4 +1,4 @@
-use regexml::Regex;
+use regexml_fork::Regex;
 
 // these contains some problem cases related to backtracking
 

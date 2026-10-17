@@ -1,4 +1,4 @@
-use regexml::{AnalyzeEntry, Error, MatchEntry, Regex};
+use regexml_fork::{AnalyzeEntry, Error, MatchEntry, Regex};
 
 // analyze-string with empty string
 #[test]

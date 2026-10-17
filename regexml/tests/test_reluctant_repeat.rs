@@ -6,7 +6,7 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use regexml::{AnalyzeEntry, Regex};
+use regexml_fork::{AnalyzeEntry, Regex};
 
 // Runs `f` on its own thread and fails the test if it does not finish in
 // time, so that a regression fails instead of hanging the test run.

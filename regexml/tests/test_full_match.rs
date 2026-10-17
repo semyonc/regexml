@@ -8,7 +8,7 @@
 // (`is_match`) but not before a full match, and `^` and `$`, which are
 // ordinary characters in the XSD dialect.
 
-use regexml::Regex;
+use regexml_fork::Regex;
 
 #[track_caller]
 fn full(regex: &Regex, cases: &[(&str, bool)]) {
