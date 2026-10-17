@@ -99,6 +99,13 @@ pub(crate) trait OperationControl {
     /// including this one if it is a capturing group itself.
     fn collect_groups(&self, _groups: &mut Vec<usize>) {}
 
+    /// Record, in every variable-length repetition inside this operation,
+    /// whether it is nested in a repetition (`within_repetition`, or this
+    /// operation being one). A repetition that is not has the same
+    /// continuation wherever and whenever it is matched, which
+    /// `ReMatcher::top_memo` relies on.
+    fn mark_nested(&mut self, _within_repetition: bool) {}
+
     /// Access child information so we can structurally dive into
     /// a regex, mostly for testing purposes.
     /// allow unused code to exist as we do use it in the tests

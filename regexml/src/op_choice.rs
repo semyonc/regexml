@@ -100,6 +100,12 @@ impl OperationControl for Choice {
             branch.collect_groups(groups);
         }
     }
+
+    fn mark_nested(&mut self, within_repetition: bool) {
+        for branch in &mut self.branches {
+            branch.mark_nested(within_repetition);
+        }
+    }
 }
 
 struct ChoiceIterator<'a> {

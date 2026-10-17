@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use ahash::{HashMap, HashMapExt};
+use ahash::{HashMap, HashMapExt, HashSet};
 
 use crate::op_repeat::Repeat;
 
@@ -43,10 +43,38 @@ pub(crate) struct State {
     // Undo log of the capture writes made during the current match attempt,
     // most recent last; see `ReMatcher::trail_mark` and `ReMatcher::undo_to`.
     pub(crate) trail: Vec<Undo>,
+    // For each group, where in the log its latest logged write is, so that
+    // the groups written since a mark can be found without reading the log
+    // (`ReMatcher::captures_since`).
+    last_write: Vec<Option<usize>>,
     // What a repetition reported from a start position, in order, once it
     // reported all of it; see `ReMatcher::repeat_results`.
     repeat_results: HashMap<(usize, usize), Rc<[RepeatResult]>>,
     repeat_results_size: usize,
+    // For each repetition that is not nested in another one, the states and
+    // positions it has settled; see `ReMatcher::settled`.
+    settled: HashMap<usize, Rc<RefCell<Settled>>>,
+}
+
+/// A state of a repetition's search: its position, and what the groups that
+/// back-references refer to hold when the program has back-references
+/// (`ReMatcher::backref_snapshot`) — the only captures matching reads.
+pub(crate) type StateKey = (usize, Option<Box<[Option<usize>]>>);
+
+/// What a repetition that is not nested in another one has settled, for all
+/// its iterations in a matcher (`ReMatcher::settled`): states whose every
+/// position was reported and rejected by the rest of the expression, and
+/// positions reported and rejected. Such a repetition has the same
+/// continuation wherever it is matched — what follows it in the expression,
+/// up to the end — so what failed once fails again: a search that starts at
+/// the next position need not explore it again.
+#[derive(Debug, Default)]
+pub(crate) struct Settled {
+    // the fewest repetitions (at least the minimum) a settled state had
+    pub(crate) explored: HashMap<StateKey, usize>,
+    // settled states with fewer repetitions than the minimum
+    pub(crate) explored_below_min: HashSet<(StateKey, usize)>,
+    pub(crate) failed: HashSet<StateKey>,
 }
 
 impl State {
@@ -57,8 +85,10 @@ impl State {
             capture_state: CaptureState::new(),
             anchored_match: false,
             trail: Vec::new(),
+            last_write: Vec::new(),
             repeat_results: HashMap::new(),
             repeat_results_size: 0,
+            settled: HashMap::new(),
         }
     }
 }
@@ -76,11 +106,13 @@ impl State {
 /// which puts back exactly the state its attempt started from.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Undo {
-    /// `capture_state.startn` / `endn` of a group.
+    /// `capture_state.startn` / `endn` of a group, and where in the log the
+    /// group's previous write was (`State::last_write`).
     Paren {
         group_nr: usize,
         start: Option<usize>,
         end: Option<usize>,
+        last_write: Option<usize>,
     },
     /// `start_backref` / `end_backref` of a group.
     Backref {
@@ -145,6 +177,25 @@ impl<'a> ReMatcher<'a> {
         self.program.optimization_flags & OPT_HASBACKREFS == 0
     }
 
+    /// Whether the search may try more than one start position: not for a
+    /// whole-string match (`is_full_match`) nor for an expression that starts
+    /// with `^` outside multi-line mode. Only then is `Settled` of use.
+    pub(crate) fn starts_more_than_once(&self) -> bool {
+        let starts_with_caret = self.program.optimization_flags & OPT_HASBOL != 0;
+        !self.anchored_match() && (!starts_with_caret || self.program.flags.is_multi_line())
+    }
+
+    /// What the repetition `repeat`, not nested in another repetition, has
+    /// settled in this matcher (`Settled`).
+    pub(crate) fn settled(&self, repeat: *const Repeat) -> Rc<RefCell<Settled>> {
+        self.state
+            .borrow_mut()
+            .settled
+            .entry(repeat as usize)
+            .or_default()
+            .clone()
+    }
+
     /// What the repetition `repeat` reported from `position`, if a complete
     /// iteration recorded it (`may_reuse_repeat_results`).
     pub(crate) fn repeat_results(
@@ -197,7 +248,7 @@ impl<'a> ReMatcher<'a> {
         if let Some(idx) = iter.next() {
             self.set_paren_end(0, idx);
             // the captures are those of the match: nothing left to undo
-            self.state.borrow_mut().trail.clear();
+            self.clear_trail();
             true
         } else {
             // didn't match; an exhausted iterator has already taken back its
@@ -211,7 +262,7 @@ impl<'a> ReMatcher<'a> {
     pub(crate) fn matches(&mut self, i: usize) -> bool {
         // clear the captured group state
         self.state.borrow_mut().capture_state = CaptureState::new();
-        self.state.borrow_mut().trail.clear();
+        self.clear_trail();
 
         // can we optimize the search by looking for new lines?
         if self.program.optimization_flags & OPT_HASBOL == OPT_HASBOL {
@@ -323,8 +374,14 @@ impl<'a> ReMatcher<'a> {
     pub(crate) fn is_full_match(&mut self) -> bool {
         // clear the captured group state
         self.state.borrow_mut().capture_state = CaptureState::new();
-        self.state.borrow_mut().trail.clear();
+        self.clear_trail();
 
+        // what every match needs, as `matches` checks it first: enough input,
+        // and the operations the program cannot match without
+        // (`ReProgram::preconditions`)
+        if self.search.len() < self.program.minimum_length || !self.check_preconditions(0) {
+            return false;
+        }
         self.match_at(0, true)
     }
 
@@ -530,29 +587,44 @@ impl<'a> ReMatcher<'a> {
 
     // state related
 
-    /// The groups written since `mark` (on the path being followed: the
-    /// writes of abandoned attempts have been taken back), with what they
+    /// Of `groups`, those written since `mark` (on the path being followed:
+    /// the writes of abandoned attempts have been taken back), with what they
     /// hold now.
-    pub(crate) fn captures_since(&self, mark: usize) -> Box<[Capture]> {
+    pub(crate) fn captures_since(&self, mark: usize, groups: &[usize]) -> Box<[Capture]> {
         let state = self.state.borrow();
-        let mut groups: Vec<usize> = state.trail[mark..]
-            .iter()
-            .filter_map(|undo| match undo {
-                Undo::Paren { group_nr, .. } => Some(*group_nr),
-                Undo::Backref { .. } => None,
-            })
-            .collect();
-        groups.sort_unstable();
-        groups.dedup();
         let captures = &state.capture_state;
         groups
-            .into_iter()
-            .map(|group_nr| Capture {
+            .iter()
+            .filter(|&&group_nr| {
+                state
+                    .last_write
+                    .get(group_nr)
+                    .copied()
+                    .flatten()
+                    .is_some_and(|at| at >= mark)
+            })
+            .map(|&group_nr| Capture {
                 group_nr,
                 start: captures.startn.get(group_nr).copied().flatten(),
                 end: captures.endn.get(group_nr).copied().flatten(),
             })
             .collect()
+    }
+
+    /// Empties the capture log, at the start of a search or after a match.
+    fn clear_trail(&self) {
+        let state = &mut *self.state.borrow_mut();
+        state.trail.clear();
+        state.last_write.clear();
+    }
+
+    /// Records that group `group_nr` matched the empty string at `position`,
+    /// as `Capture` does when its operand matches there.
+    pub(crate) fn capture_empty(&self, group_nr: usize, position: usize) {
+        if group_nr >= self.paren_count() {
+            self.set_paren_count(group_nr + 1);
+        }
+        self.capture(group_nr, position, position);
     }
 
     /// Writes a group as `captures_since` reported it, logged like `capture`.
@@ -571,9 +643,13 @@ impl<'a> ReMatcher<'a> {
     /// What the groups that back-references refer to hold, as one slice:
     /// everything matching reads of the captures.
     pub(crate) fn backref_snapshot(&self) -> Box<[Option<usize>]> {
+        self.snapshot_of(&self.program.back_referenced_groups)
+    }
+
+    /// What `groups` hold for back-references, as one slice.
+    pub(crate) fn snapshot_of(&self, groups: &[usize]) -> Box<[Option<usize>]> {
         let state = self.state.borrow();
-        self.program
-            .back_referenced_groups
+        groups
             .iter()
             .flat_map(|&group_nr| {
                 // the arrays are made by `match_at`; the preconditions run
@@ -655,10 +731,12 @@ impl<'a> ReMatcher<'a> {
         let state = &mut *self.state.borrow_mut();
         let captures = &mut state.capture_state;
         if self.track_captures {
+            let last_write = log_write(&mut state.last_write, group_nr, state.trail.len());
             state.trail.push(Undo::Paren {
                 group_nr,
                 start: captures.startn.get(group_nr).copied().flatten(),
                 end: captures.endn.get(group_nr).copied().flatten(),
+                last_write,
             });
         }
         captures.set_paren_start(group_nr, start);
@@ -694,10 +772,12 @@ impl<'a> ReMatcher<'a> {
         if group_nr < captures.startn.len() && group_nr < captures.endn.len() {
             let (start, end) = (captures.startn[group_nr], captures.endn[group_nr]);
             if start.is_some() || end.is_some() {
+                let last_write = log_write(&mut state.last_write, group_nr, state.trail.len());
                 state.trail.push(Undo::Paren {
                     group_nr,
                     start,
                     end,
+                    last_write,
                 });
                 captures.startn[group_nr] = None;
                 captures.endn[group_nr] = None;
@@ -733,9 +813,11 @@ impl<'a> ReMatcher<'a> {
                     group_nr,
                     start,
                     end,
+                    last_write,
                 } => {
                     state.capture_state.startn[group_nr] = start;
                     state.capture_state.endn[group_nr] = end;
+                    state.last_write[group_nr] = last_write;
                 }
                 Undo::Backref {
                     group_nr,
@@ -750,10 +832,21 @@ impl<'a> ReMatcher<'a> {
     }
 }
 
+// Records that the write of group `group_nr` about to be logged at `at` is
+// its latest, and returns where the previous one was.
+fn log_write(last_write: &mut Vec<Option<usize>>, group_nr: usize, at: usize) -> Option<usize> {
+    if group_nr >= last_write.len() {
+        last_write.resize(group_nr + 1, None);
+    }
+    last_write[group_nr].replace(at)
+}
+
 #[cfg(test)]
 thread_local! {
     // Turns `ReMatcher::repeat_results` off, so that tests can compare.
     pub(crate) static NO_REPEAT_RESULTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    // Turns `Settled` and the shortcuts of `Repeat::later_successors` off.
+    pub(crate) static NO_SHORTCUTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// A position a repetition reported, with the groups it had written on the

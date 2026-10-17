@@ -185,6 +185,12 @@ impl OperationControl for Sequence {
             operation.collect_groups(groups);
         }
     }
+
+    fn mark_nested(&mut self, within_repetition: bool) {
+        for operation in &mut self.operations {
+            operation.mark_nested(within_repetition);
+        }
+    }
 }
 
 // A sequence needs no capture bookkeeping of its own: it only backtracks into

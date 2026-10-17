@@ -8,7 +8,7 @@ use crate::{
 // Open paren (captured group) within a regular expression
 #[derive(Debug, Clone)]
 pub(crate) struct Capture {
-    group_nr: usize,
+    pub(crate) group_nr: usize,
     pub(crate) child_op: Box<Operation>,
 }
 
@@ -70,6 +70,10 @@ impl OperationControl for Capture {
     fn collect_groups(&self, groups: &mut Vec<usize>) {
         groups.push(self.group_nr);
         self.child_op.collect_groups(groups);
+    }
+
+    fn mark_nested(&mut self, within_repetition: bool) {
+        self.child_op.mark_nested(within_repetition);
     }
 }
 

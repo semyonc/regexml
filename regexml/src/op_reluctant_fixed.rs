@@ -98,6 +98,10 @@ impl OperationControl for ReluctantFixed {
     fn collect_groups(&self, groups: &mut Vec<usize>) {
         self.operation.collect_groups(groups);
     }
+
+    fn mark_nested(&mut self, _within_repetition: bool) {
+        self.operation.mark_nested(true);
+    }
 }
 
 impl RepeatOperation for ReluctantFixed {

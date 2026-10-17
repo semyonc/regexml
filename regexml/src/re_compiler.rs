@@ -1229,7 +1229,8 @@ impl ReCompiler {
                 }
                 return Err(Error::syntax("Unexpected input remains"));
             }
-            let operation = operation.optimize(&self.re_flags);
+            let mut operation = operation.optimize(&self.re_flags);
+            operation.mark_nested(false);
 
             let mut program = ReProgram::new(
                 self.pattern,
