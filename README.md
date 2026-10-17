@@ -85,7 +85,3 @@ maintainer; the commit that adds `Regex::is_full_match` is its author's, taken f
 against external test suites rather than taken on trust: the engine's own tests, XQTS 1.0.2 and the W3C XML Schema
 test suite through `xsd-schema`, the XSLT 3.0 test suite's 2.0 cases through an XSLT 2.0 processor, and a randomized
 comparison against Python's `re`.
-
-## Maintainer
-
-Semyon A. Chertkov ([@semyonc](https://github.com/semyonc)). Issues and pull requests are welcome here.
