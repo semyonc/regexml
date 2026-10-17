@@ -71,6 +71,10 @@ Paligo/regexml#15, by its author. Compiling the crate needs Rust 1.79 or newer (
   further repetition, up to `usize::MAX` of them for `+?`, whenever what followed failed: `^(?:()+?)$` never finished
   on "a". It is now the operand once (or nothing, with a minimum of zero), as in the greedy case. (`reluctant empty
   operand` commit)
+- **A reluctant quantifier on `^` or `$` compiles.** F&O 3.1 §5.6.1.1 makes `^` and `$` character classes, so they
+  take quantifiers; when the quantifier allowed zero occurrences (`$??`, `^*?`, `(?:$){0,}?`) the compiler left the
+  `?` that makes it reluctant in the pattern, where it was read as a quantifier with nothing before it, a syntax
+  error. (`anchor quantifier` commit)
 - **The `x` flag no longer removes a form feed (#xC).** F&O 3.1 §5.6.2: "whitespace characters (#x9, #xA, #xD and
   #x20) in the regular expression are removed prior to matching with one exception: whitespace characters within
   character class expressions (charClassExpr) are not removed" (F&O 1.0 §7.6.1.1 says the same). The engine removed

@@ -914,6 +914,11 @@ impl ReCompiler {
                     || quantifier_type == Some('*')
                     || (quantifier_type == Some('{') && self.bracket_min == 0)
                 {
+                    // a `?` that makes the quantifier reluctant is part of it
+                    // (`$??`), not a quantifier of its own
+                    if self.idx < self.len && self.pattern[self.idx] == '?' {
+                        self.idx += 1;
+                    }
                     return Ok(Operation::from(Nothing));
                 } else {
                     quantifier_type = None

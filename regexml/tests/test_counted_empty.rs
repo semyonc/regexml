@@ -100,3 +100,19 @@ fn an_operand_that_only_matches_empty_is_kept_when_required() {
     search("a($)?b", "", "ab", true);
     search("a(?:$){1,3}", "", "xa", true);
 }
+
+#[test]
+fn a_reluctant_quantifier_on_an_anchor() {
+    // F&O 3.1 §5.6.1.1 makes `^` and `$` character classes, so they take
+    // quantifiers, reluctant ones included; the `?` that makes a quantifier
+    // reluctant was left over, and read as a quantifier with nothing before
+    // it, when the quantified anchor allowed zero occurrences
+    search("(?:$){0,}?a+?", "", "aa", true);
+    search("a$??", "", "ab", true);
+    search("^??a", "", "ba", true);
+    search("a$*?", "", "ab", true);
+    search("a(?:$)+?", "", "a", true);
+    search("a(?:$)+?", "", "ab", false);
+    search("a(?:$){2}?b", "", "ab", false);
+    search("a${1,2}?", "", "ab", false);
+}
