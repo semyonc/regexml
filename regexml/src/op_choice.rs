@@ -111,7 +111,7 @@ impl OperationControl for Choice {
 struct ChoiceIterator<'a> {
     matcher: &'a ReMatcher<'a>,
     position: usize,
-    branches_iter: Box<dyn Iterator<Item = &'a Operation> + 'a>,
+    branches_iter: std::slice::Iter<'a, Operation>,
     current_iter: Option<Box<dyn Iterator<Item = usize> + 'a>>,
 }
 
@@ -120,7 +120,7 @@ impl<'a> ChoiceIterator<'a> {
         Self {
             matcher,
             position,
-            branches_iter: Box::new(branches.iter()),
+            branches_iter: branches.iter(),
             current_iter: None,
         }
     }

@@ -46,6 +46,11 @@ impl OperationControl for Capture {
         matcher: &'a ReMatcher<'a>,
         position: usize,
     ) -> Box<dyn Iterator<Item = usize> + 'a> {
+        if matcher.answer_only() {
+            // nothing reads what the group captures: no back-references,
+            // and the caller only asks whether there is a match
+            return self.child_op.matches_iter(matcher, position);
+        }
         // everything this attempt captures, here and inside the group, is
         // logged after this mark
         let mark = matcher.trail_mark();
