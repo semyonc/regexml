@@ -46,8 +46,8 @@ Paligo/regexml#15, by its author. The minimum supported Rust version is 1.85 (`r
   `{n,m}` of such an operand into `*`, so `^(a|){2}$` matched "aaaa" and an XSD pattern facet like `(\d|){2}`
   accepted any number of digits. The bounds are now kept as written (empty repetitions count towards the minimum, see
   the next entry). And a repetition of an operand that only matches the empty string (an anchor or an empty group)
-  with a minimum of one or more is the operand once instead of nothing: `a($)+b` no longer matches "ab". (`counted
-  repetition` and `repetition search` commits)
+  with a minimum of one or more is the operand once instead of nothing: `a($)+b` no longer matches "ab". (`771fb03`,
+  `45a0c79`)
 - **A repetition of variable length tries every way of matching before it fails.** F&O 3.1 §5.6.1.2: a quantifier
   "matches the longest possible substring" (greedy) or "the shortest possible substring consistent with the match as
   a whole succeeding" (reluctant), so every way of matching is tried before there is no match. The iterators of the
@@ -62,26 +62,27 @@ Paligo/regexml#15, by its author. The minimum supported Rust version is 1.85 (`r
   repetition may match the empty string; beyond it an empty repetition is the last one, which ends the search
   without losing a match. A state already explored is not explored again (keyed by position, and by what the
   back-referenced groups hold when there are back-references), and a repetition's results from a position are kept
-  for the rest of the match. Exponential searches became polynomial: `(\w+\s?)*` over 200 words and "!", more
-  than 60 s → 0.8 ms; `(a+)+b` over 20 a's, 100 ms → 18 µs; `(a|b|ab)*` over 14 "ab", 13 ms → 46 µs. Patterns
-  whose exponential search the old counter cut short, with a wrong answer when the match needed the cut-off part,
-  now take polynomial time instead: `(a*)*b` over 800 a's and "c" 70 µs → 9 ms, `((a*)*)*b` searched in 200 a's,
-  "c", "b" 72 µs → 45 ms. (`repetition search` commit)
+  for the rest of the match. Exponential searches became polynomial (optimized build): `(\w+\s?)*` over 200 words
+  and "!", more than 60 s → 0.8 ms; `(\w+\s?)*!$` searched in 2 400 characters, more than 120 s → 2 s; `(a+)+b`
+  over 20 a's, 99 ms → 18 µs; `(a|b|ab)*` over 14 "ab", 13 ms → 40 µs; ten nested `(…)*` over "aaaaab", 0.75 ms →
+  77 µs, and with `replace_all` 63 ms → 6 ms. Patterns whose exponential search the old counter cut short (with a
+  wrong answer when the match needed the part it cut) take polynomial time instead, a few times to some hundred
+  times longer than before on long inputs: `(a*)*b` over 800 a's and "c" 70 µs → 19 ms, `(a*)*b` searched in 400
+  a's, "c", "b" 6.8 ms → 0.67 s, `(([a-z]*)*)*x` over 200 a's 56 µs → 86 ms. (`45a0c79`)
 - **A reluctant repetition of an operand that only matches the empty string finishes.** `()+?`, `(){2}?`, `($)+?`
   compiled to a fixed-length reluctant repetition of length 0, which offered the same position again for every
   further repetition, up to `usize::MAX` of them for `+?`, whenever what followed failed: `^(?:()+?)$` never finished
-  on "a". It is now the operand once (or nothing, with a minimum of zero), as in the greedy case. (`reluctant empty
-  operand` commit)
+  on "a". It is now the operand once (or nothing, with a minimum of zero), as in the greedy case. (`6b885ce`)
 - **A reluctant quantifier on `^` or `$` compiles.** F&O 3.1 §5.6.1.1 makes `^` and `$` character classes, so they
   take quantifiers; when the quantifier allowed zero occurrences (`$??`, `^*?`, `(?:$){0,}?`) the compiler left the
   `?` that makes it reluctant in the pattern, where it was read as a quantifier with nothing before it, a syntax
-  error. (`anchor quantifier` commit)
+  error. (`fc71c20`)
 - **The `x` flag no longer removes a form feed (#xC).** F&O 3.1 §5.6.2: "whitespace characters (#x9, #xA, #xD and
   #x20) in the regular expression are removed prior to matching with one exception: whitespace characters within
   character class expressions (charClassExpr) are not removed" (F&O 1.0 §7.6.1.1 says the same). The engine removed
   every ASCII whitespace character, #xC included, so under `x` a form feed in the pattern disappeared and, between `(`
   and `?`, turned a capturing group into a non-capturing one. Now exactly the four are removed, in every dialect.
-  (`x flag` commit)
+  (`17463ff`)
 
 ### Added
 
@@ -122,9 +123,10 @@ Paligo/regexml#15, by its author. The minimum supported Rust version is 1.85 (`r
 - The lifetime of the matcher `Regex::matcher` returns is spelled out (`ReMatcher<'_>`; the
   `mismatched_lifetime_syntaxes` warning). (`5c028bf`)
 - The crate-private `Language::XSD` is `Language::Xsd` (clippy `upper_case_acronyms`). (`3fc4ec1`)
+- `rust-version = "1.85"`; the two tool crates of the workspace are `publish = false`. (`017f0d6`)
 - Package metadata, README and licence notices of the fork. (`bf48f9f`)
 - The package carries `LICENSE-APACHE`, `LICENSE-MPL2`, `COPYRIGHT` and `CREDITS.txt`, byte-identical copies of the
-  files at the repository root; regexml 0.2.2's package carried none of them. (`licence files` commit)
+  files at the repository root; regexml 0.2.2's package carried none of them. (`d95e9a2`)
 
 ### Known limitations
 
