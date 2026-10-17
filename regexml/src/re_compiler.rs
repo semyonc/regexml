@@ -41,6 +41,20 @@ pub(crate) const NODE_TOPLEVEL: u32 = 2;
 // and RFC 3987, nest 15 levels deep.
 const MAX_NESTING_DEPTH: usize = 64;
 
+// The message of the nesting limit's `Error::Syntax`, which `Error::kind`
+// recognizes as `ErrorKind::NestingTooDeep`.
+fn nesting_too_deep_message() -> String {
+    format!(
+        "Groups and character classes nested more than {} levels deep",
+        MAX_NESTING_DEPTH
+    )
+}
+
+// The start of the message of an unknown block name's `Error::Syntax`
+// (`category::BlockLookup::lookup`), which `Error::kind` recognizes as
+// `ErrorKind::UnknownBlock` when the name is a well-formed one.
+pub(crate) const UNKNOWN_BLOCK_PREFIX: &str = "Unknown Unicode block: ";
+
 pub(crate) struct ReCompiler {
     // Input state for compiling regular expression
 
@@ -69,6 +83,9 @@ pub(crate) struct ReCompiler {
 }
 
 /// Regular expression error
+///
+/// [`Error::kind`] classifies it further, for a caller that maps errors to
+/// its own codes; [`Display`](std::fmt::Display) gives the message.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Error {
     /// Internal error
@@ -76,7 +93,9 @@ pub enum Error {
     /// Invalid flags (FORX0001)
     InvalidFlags(String),
     /// Syntax error (FORX0002). Also reported for an expression that nests
-    /// groups and character classes more than 64 levels deep.
+    /// groups and character classes more than 64 levels deep
+    /// ([`ErrorKind::NestingTooDeep`]) and for an unknown block name
+    /// ([`ErrorKind::UnknownBlock`]).
     Syntax(String),
     /// Pattern matches an empty string (FORX0003)
     MatchesEmptyString,
@@ -84,11 +103,113 @@ pub enum Error {
     InvalidReplacementString(String),
 }
 
+/// The kind of an [`Error`], from [`Error::kind`].
+///
+/// Each [`Error`] variant has a kind of its own, and a syntax error that a
+/// caller may want to treat differently from the others has a more specific
+/// one. More kinds may be added; a match on this enum needs a wildcard arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ErrorKind {
+    /// The flags are not valid ([`Error::InvalidFlags`]; FORX0001 in F&O).
+    InvalidFlags,
+    /// The pattern is not a valid regular expression ([`Error::Syntax`];
+    /// FORX0002), for a reason that has no kind of its own.
+    Syntax,
+    /// Groups and character classes are nested more than 64 levels deep (an
+    /// [`Error::Syntax`]). The limit protects the stack: compiling and
+    /// matching recurse once per level. The expression may be valid, so a
+    /// caller may report this as an implementation limit rather than a
+    /// syntax error.
+    NestingTooDeep,
+    /// A block escape `\p{IsX}` or `\P{IsX}` names a block that is not known,
+    /// with a well-formed name X (`[a-zA-Z0-9-]+`) (an [`Error::Syntax`]).
+    /// XML Schema 1.1 Part 2 §G.4.2.4 makes such an escape denote the set of
+    /// all characters; compiling with the `;k` flag does that (see
+    /// [`Regex::xsd`](crate::Regex::xsd)). F&O 3.1 §5.6.1.5 makes it an error
+    /// (FORX0002).
+    UnknownBlock,
+    /// The regular expression matches the zero-length string, which
+    /// [`Regex::replace_all`](crate::Regex::replace_all),
+    /// [`Regex::tokenize`](crate::Regex::tokenize) and
+    /// [`Regex::analyze`](crate::Regex::analyze) do not allow
+    /// ([`Error::MatchesEmptyString`]; FORX0003).
+    MatchesEmptyString,
+    /// The replacement string is not valid
+    /// ([`Error::InvalidReplacementString`]; FORX0004).
+    InvalidReplacement,
+    /// An internal error of the engine ([`Error::Internal`]).
+    Internal,
+}
+
 impl Error {
     pub(crate) fn syntax(s: impl Into<String>) -> Error {
         Error::Syntax(s.into())
     }
+
+    /// The kind of this error.
+    ///
+    /// ```
+    /// use regexml_fork::{ErrorKind, Regex};
+    ///
+    /// let error = Regex::xsd(r"\p{IsNoSuchBlock}", "").unwrap_err();
+    /// assert_eq!(error.kind(), ErrorKind::UnknownBlock);
+    /// assert!(Regex::xsd(r"\p{IsNoSuchBlock}", ";k").is_ok());
+    ///
+    /// let deep = format!("{}a{}", "(".repeat(65), ")".repeat(65));
+    /// assert_eq!(Regex::xpath(&deep, "").unwrap_err().kind(), ErrorKind::NestingTooDeep);
+    ///
+    /// assert_eq!(Regex::xpath("a", "z").unwrap_err().kind(), ErrorKind::InvalidFlags);
+    /// assert_eq!(Regex::xpath("(a", "").unwrap_err().kind(), ErrorKind::Syntax);
+    /// ```
+    ///
+    /// The kind of an [`Error::Syntax`] is decided from the message the
+    /// engine wrote into it, so an error built by a caller with the same
+    /// message has the same kind.
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Error::Internal => ErrorKind::Internal,
+            Error::InvalidFlags(_) => ErrorKind::InvalidFlags,
+            Error::Syntax(message) => {
+                if *message == nesting_too_deep_message() {
+                    ErrorKind::NestingTooDeep
+                } else if message
+                    .strip_prefix(UNKNOWN_BLOCK_PREFIX)
+                    .is_some_and(|name| {
+                        !name.is_empty()
+                            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                    })
+                {
+                    ErrorKind::UnknownBlock
+                } else {
+                    ErrorKind::Syntax
+                }
+            }
+            Error::MatchesEmptyString => ErrorKind::MatchesEmptyString,
+            Error::InvalidReplacementString(_) => ErrorKind::InvalidReplacement,
+        }
+    }
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Internal => f.write_str("internal error of the regular-expression engine"),
+            Error::InvalidFlags(message) => {
+                write!(f, "invalid regular-expression flags: {message}")
+            }
+            Error::Syntax(message) => write!(f, "invalid regular expression: {message}"),
+            Error::MatchesEmptyString => {
+                f.write_str("the regular expression matches the zero-length string")
+            }
+            Error::InvalidReplacementString(message) => {
+                write!(f, "invalid replacement string: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 enum CharacterClassOrBackReference {
     CharacterClass(CharacterClassBuilder),
@@ -123,10 +244,7 @@ impl ReCompiler {
     fn enter_nesting(&mut self) -> Result<(), Error> {
         self.nesting_depth += 1;
         if self.nesting_depth > MAX_NESTING_DEPTH {
-            return Err(Error::syntax(format!(
-                "Groups and character classes nested more than {} levels deep",
-                MAX_NESTING_DEPTH
-            )));
+            return Err(Error::syntax(nesting_too_deep_message()));
         }
         Ok(())
     }

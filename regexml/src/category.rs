@@ -8,6 +8,7 @@ use icu_properties::sets;
 use icu_properties::GeneralCategoryGroup;
 
 use crate::block;
+use crate::re_compiler::UNKNOWN_BLOCK_PREFIX;
 use crate::Error;
 
 // Based on character class escapes in https://www.w3.org/TR/xmlschema-2/#regexs
@@ -183,7 +184,7 @@ impl BlockLookup {
     pub(crate) fn lookup(&self, name: &str) -> Result<&'static block::Block, Error> {
         match self.blocks.get(name) {
             Some(block) => Ok(block),
-            None => Err(Error::syntax(format!("Unknown Unicode block: {}", name))),
+            None => Err(Error::syntax(format!("{}{}", UNKNOWN_BLOCK_PREFIX, name))),
         }
     }
 }

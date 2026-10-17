@@ -54,11 +54,11 @@ See [`regexml/CHANGELOG.md`](regexml/CHANGELOG.md) for the details and the spec 
   `x` (§7.6.1.1: "If there are characters present that are not defined here as flags, then an error is raised"), and
   in which `.` without the `s` flag "matches any character except a newline (#x0A) character" — F&O 3.1 §5.6.2
   excludes the carriage return #xD as well, and `Regex::xpath` keeps that rule.
-<!-- draft: update when F3 lands -->
-- **Error kinds**, `Error::kind`: a classification of compile errors (invalid flags, syntax, too deep nesting, an
-  unknown block name, …) that callers can match on instead of the error's text. The existing `Error` variants are
-  unchanged.
-<!-- end draft -->
+- **Error kinds**, `Error::kind`: a `#[non_exhaustive]` `ErrorKind` for every error — invalid flags (FORX0001), a
+  syntax error (FORX0002), the zero-length match (FORX0003), an invalid replacement string (FORX0004) — and two
+  syntax errors a caller may want to treat apart: groups and classes nested more than 64 levels deep, and an unknown
+  block name that the `;k` flag would accept (XML Schema 1.1 Part 2 §G.4.2.4). `Error` also implements `Display`
+  and `std::error::Error`. The `Error` variants are those of 0.2.2.
 
 ## Licenses and notices
 
