@@ -1,7 +1,7 @@
 // these test cases are a transliteration of test cases in matches.xml
 // part of the qt3 test suite
 
-use regexml::{Error, Regex};
+use regexml_fork::{Error, Regex};
 
 #[test]
 fn test_matches2args_1() {

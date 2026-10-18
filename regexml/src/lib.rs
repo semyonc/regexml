@@ -5,7 +5,6 @@ mod analyze_string;
 mod block;
 mod category;
 mod character_class;
-mod history;
 mod op_atom;
 mod op_back_reference;
 mod op_bol;
@@ -28,5 +27,5 @@ mod re_program;
 mod regex;
 
 pub use crate::analyze_string::{AnalyzeEntry, MatchEntry};
-pub use crate::re_compiler::Error;
+pub use crate::re_compiler::{Error, ErrorKind};
 pub use crate::regex::Regex;

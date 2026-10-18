@@ -27,6 +27,9 @@ pub(crate) struct ReProgram {
     pub(crate) optimization_flags: u32,
     pub(crate) max_parens: Option<usize>,
     pub(crate) backtracking_limit: Option<usize>,
+    // the groups the back-references refer to, the only captures matching
+    // reads (`ReMatcher::backref_snapshot`)
+    pub(crate) back_referenced_groups: Vec<usize>,
 }
 
 impl ReProgram {
@@ -70,6 +73,7 @@ impl ReProgram {
             max_parens,
             minimum_length,
             backtracking_limit: None,
+            back_referenced_groups: Vec::new(),
         };
         if let Some(precondition_operation) = precondition_operation {
             r.add_precondition(precondition_operation, None, 0);
@@ -113,7 +117,14 @@ impl ReProgram {
                 let mut mp = min_position;
                 for o in &sequence.operations {
                     if matches!(o, Operation::Bol(_)) {
-                        fp = Some(0);
+                        // `^` is the start of the string, except in
+                        // multi-line mode, where it is also the start of any
+                        // line (F&O 3.1 §5.6.2)
+                        fp = if self.flags.is_multi_line() {
+                            None
+                        } else {
+                            Some(0)
+                        };
                     }
                     self.add_precondition(o.clone(), fp, mp);
                     if let (Some(some_fp), Some(match_length)) = (fp, o.get_match_length()) {

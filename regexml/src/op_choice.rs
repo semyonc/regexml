@@ -2,7 +2,7 @@ use icu_collections::codepointinvlist::CodePointInversionListBuilder;
 
 use crate::{
     character_class::CharacterClass,
-    operation::{Operation, OperationControl, MATCHES_ZLS_NEVER},
+    operation::{Operation, OperationControl, Within, MATCHES_ZLS_NEVER},
     re_flags::ReFlags,
     re_matcher::ReMatcher,
 };
@@ -94,12 +94,24 @@ impl OperationControl for Choice {
     fn children(&self) -> Vec<Operation> {
         self.branches.clone()
     }
+
+    fn collect_groups(&self, groups: &mut Vec<usize>) {
+        for branch in &self.branches {
+            branch.collect_groups(groups);
+        }
+    }
+
+    fn mark_nested(&mut self, within: Within) {
+        for branch in &mut self.branches {
+            branch.mark_nested(within);
+        }
+    }
 }
 
 struct ChoiceIterator<'a> {
     matcher: &'a ReMatcher<'a>,
     position: usize,
-    branches_iter: Box<dyn Iterator<Item = &'a Operation> + 'a>,
+    branches_iter: std::slice::Iter<'a, Operation>,
     current_iter: Option<Box<dyn Iterator<Item = usize> + 'a>>,
 }
 
@@ -108,7 +120,7 @@ impl<'a> ChoiceIterator<'a> {
         Self {
             matcher,
             position,
-            branches_iter: Box::new(branches.iter()),
+            branches_iter: branches.iter(),
             current_iter: None,
         }
     }
@@ -117,8 +129,8 @@ impl<'a> ChoiceIterator<'a> {
         // look for the next branch
         let next_op = self.branches_iter.next();
         if let Some(next_op) = next_op {
-            // if there is one, set the current iter to that one
-            self.matcher.clear_captured_groups_beyond(self.position);
+            // if there is one, set the current iter to that one; the branch
+            // before it is exhausted, so it has taken back its captures
             self.current_iter = Some(next_op.matches_iter(self.matcher, self.position));
             true
         } else {

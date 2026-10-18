@@ -1,5 +1,9 @@
 use crate::{
-    operation::{Operation, OperationControl, RepeatOperation, MATCHES_ZLS_ANYWHERE},
+    op_greedy_fixed::{uncovered_ends, IntStepIterator},
+    operation::{
+        captures, groups_of, unbind_groups, Operation, OperationControl, RepeatOperation,
+        RestoreCaptures, Within, MATCHES_ZLS_ANYWHERE,
+    },
     re_flags::ReFlags,
     re_matcher::ReMatcher,
 };
@@ -12,6 +16,9 @@ pub(crate) struct ReluctantFixed {
     pub(crate) min: usize,
     max: usize,
     len: usize,
+    // whether it is in the operand of a repetition that is not nested, with
+    // only sequences, choices and groups in between (`ReMatcher::covered`)
+    covered: bool,
 }
 
 impl ReluctantFixed {
@@ -21,6 +28,7 @@ impl ReluctantFixed {
             min,
             max,
             len,
+            covered: false,
         }
     }
 }
@@ -58,25 +66,67 @@ impl OperationControl for ReluctantFixed {
             min: self.min,
             max: self.max,
             len: self.len,
+            covered: self.covered,
         })
     }
 
     fn matches_iter<'a>(
         &'a self,
-        matcher: &'a ReMatcher,
+        matcher: &'a ReMatcher<'a>,
         position: usize,
     ) -> Box<dyn Iterator<Item = usize> + 'a> {
-        Box::new(ReluctantFixedIterator::new(
+        if self.covered && self.max == usize::MAX {
+            // only the answer counts: the order of the ends does not matter
+            if let Some(mut seen) = matcher.covered(self as *const Self as usize) {
+                let ends = uncovered_ends(
+                    &self.operation,
+                    matcher,
+                    &mut seen,
+                    position,
+                    self.min,
+                    self.len,
+                );
+                return match ends {
+                    Some((first, last)) => {
+                        Box::new(IntStepIterator::new(first, self.len as i64, last))
+                    }
+                    None => Box::new(std::iter::empty()),
+                };
+            }
+        }
+        let capturing = matcher.tracks_captures() && captures(&self.operation);
+        let iter = Box::new(ReluctantFixedIterator::new(
             self.operation.as_ref(),
             matcher,
             position,
             self.min,
             self.max,
-        ))
+            if capturing && self.min == 0 {
+                groups_of(&self.operation)
+            } else {
+                Vec::new()
+            },
+        ));
+        if capturing {
+            // the iterations it has done are kept as it adds one more, and
+            // taken back only when it gives up
+            RestoreCaptures::wrap(matcher, matcher.trail_mark(), iter)
+        } else {
+            iter
+        }
     }
 
     fn children(&self) -> Vec<Operation> {
         vec![self.operation.as_ref().clone()]
+    }
+
+    fn collect_groups(&self, groups: &mut Vec<usize>) {
+        self.operation.collect_groups(groups);
+    }
+
+    fn mark_nested(&mut self, within: Within) {
+        self.covered = within == Within::TopOperand;
+        self.operation.mark_nested(Within::Nested);
     }
 }
 
@@ -101,12 +151,16 @@ impl RepeatOperation for ReluctantFixed {
 struct ReluctantFixedIterator<'a> {
     op: &'a Operation,
     matcher: &'a ReMatcher<'a>,
-    position: usize,
     count: usize,
     min: usize,
     max: usize,
     started: bool,
     pos: usize,
+    // with `min` 0 and a capturing operand: its groups, left unmatched while
+    // zero iterations are reported (`unbind_groups`), and the capture log's
+    // length to go back to before the first iteration is tried
+    groups: Vec<usize>,
+    unbound: Option<usize>,
 }
 
 impl<'a> ReluctantFixedIterator<'a> {
@@ -116,16 +170,18 @@ impl<'a> ReluctantFixedIterator<'a> {
         position: usize,
         min: usize,
         max: usize,
+        groups: Vec<usize>,
     ) -> Self {
         Self {
             op,
             matcher,
-            position,
             count: 0,
             min,
             max,
             started: false,
             pos: position,
+            groups,
+            unbound: None,
         }
     }
 }
@@ -146,11 +202,16 @@ impl Iterator for ReluctantFixedIterator<'_> {
                     return None;
                 }
             }
+            if self.count == 0 && !self.groups.is_empty() {
+                self.unbound = Some(unbind_groups(self.matcher, &self.groups));
+            }
             return Some(self.pos);
+        }
+        if let Some(mark) = self.unbound.take() {
+            self.matcher.undo_to(mark);
         }
 
         if self.count < self.max {
-            self.matcher.clear_captured_groups_beyond(self.position);
             let mut it = self.op.matches_iter(self.matcher, self.pos);
             if let Some(next) = it.next() {
                 self.pos = next;

@@ -1,6 +1,6 @@
 use icu_collections::codepointinvlist::CodePointInversionListBuilder;
 use icu_properties::{sets, GeneralCategoryGroup};
-use regexml::{Error, Regex};
+use regexml_fork::{Error, Regex};
 
 #[test]
 fn test_infinite_loop() {

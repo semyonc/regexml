@@ -5,12 +5,12 @@ use crate::{
     op_nothing::Nothing,
     op_unambiguous_repeat::UnambiguousRepeat,
     operation::{
-        Operation, OperationControl, MATCHES_ZLS_ANYWHERE, MATCHES_ZLS_AT_END,
+        Operation, OperationControl, Within, MATCHES_ZLS_ANYWHERE, MATCHES_ZLS_AT_END,
         MATCHES_ZLS_AT_START, MATCHES_ZLS_NEVER,
     },
     re_compiler::ReCompiler,
     re_flags::ReFlags,
-    re_matcher::{CaptureState, ReMatcher},
+    re_matcher::ReMatcher,
 };
 
 // A sequence of multiple pieces in a regular expression.
@@ -93,6 +93,7 @@ impl OperationControl for Sequence {
                                     &repeated_operation,
                                     next_operation,
                                     flags.is_case_independent(),
+                                    flags.is_multi_line(),
                                     !repeat_operation.greedy(),
                                 ) {
                                     return Operation::from(UnambiguousRepeat::new(
@@ -172,45 +173,45 @@ impl OperationControl for Sequence {
         matcher: &'a ReMatcher<'a>,
         position: usize,
     ) -> Box<dyn Iterator<Item = usize> + 'a> {
-        Box::new(SequenceIterator::new(
-            matcher,
-            &self.operations,
-            position,
-            self.contains_capturing_expressions(),
-        ))
+        Box::new(SequenceIterator::new(matcher, &self.operations, position))
     }
 
     fn children(&self) -> Vec<Operation> {
         self.operations.clone()
     }
+
+    fn collect_groups(&self, groups: &mut Vec<usize>) {
+        for operation in &self.operations {
+            operation.collect_groups(groups);
+        }
+    }
+
+    fn mark_nested(&mut self, within: Within) {
+        for operation in &mut self.operations {
+            operation.mark_nested(within);
+        }
+    }
 }
 
+// A sequence needs no capture bookkeeping of its own: it only backtracks into
+// a term once the terms after it are exhausted, and an exhausted term has
+// taken back its captures (`CaptureGroupIterator`, `RestoreCaptures`), so
+// when the first term is exhausted too, the captures are those the sequence
+// started from.
 struct SequenceIterator<'a> {
     iterators: Vec<Box<dyn Iterator<Item = usize> + 'a>>,
     operations: &'a [Operation],
     backtracking_limit: Option<usize>,
     matcher: &'a ReMatcher<'a>,
-    saved_state: Option<CaptureState>,
 }
 
 impl<'a> SequenceIterator<'a> {
-    fn new(
-        matcher: &'a ReMatcher<'a>,
-        operations: &'a [Operation],
-        position: usize,
-        contains_capturing_expressions: bool,
-    ) -> Self {
-        let saved_state = if contains_capturing_expressions {
-            Some(matcher.capture_state())
-        } else {
-            None
-        };
+    fn new(matcher: &'a ReMatcher<'a>, operations: &'a [Operation], position: usize) -> Self {
         Self {
             iterators: vec![operations.first().unwrap().matches_iter(matcher, position)],
             operations,
             backtracking_limit: matcher.program.backtracking_limit,
             matcher,
-            saved_state,
         }
     }
 }
@@ -233,7 +234,6 @@ impl Iterator for SequenceIterator<'_> {
                 let top = self.iterators.last_mut().unwrap();
                 // take the next item from the top iterator
                 if let Some(next) = top.next() {
-                    self.matcher.clear_captured_groups_beyond(next);
                     // if the amount of iterators to process is equal or
                     // greater than the amount of operations in this sequence,
                     // then we return next
@@ -259,10 +259,6 @@ impl Iterator for SequenceIterator<'_> {
                 }
             }
             counter += 1;
-        }
-        // restore saved state
-        if let Some(saved_state) = &self.saved_state {
-            self.matcher.reset_state(saved_state.clone());
         }
         None
     }

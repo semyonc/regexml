@@ -18,7 +18,7 @@ use crate::{
     op_reluctant_fixed::ReluctantFixed,
     op_repeat::Repeat,
     op_sequence::Sequence,
-    operation::{Operation, OperationControl, MATCHES_ZLS_ANYWHERE},
+    operation::{Operation, OperationControl, Within, MATCHES_ZLS_ANYWHERE, MATCHES_ZLS_NEVER},
     re_flags::{Language, ReFlags},
     re_program::{ReProgram, OPT_HASBACKREFS},
 };
@@ -27,6 +27,33 @@ use crate::{
 pub(crate) const NODE_NORMAL: u32 = 0;
 // True if top level expr
 pub(crate) const NODE_TOPLEVEL: u32 = 2;
+
+// The deepest nesting of groups and character classes that is compiled.
+//
+// Compiling and matching recurse once per level: a level of groups takes about
+// 1 KB of stack to compile in an optimized build (5.5 KB in a debug build) and
+// up to 0.5 KB (2 KB) to match, and a level of character class subtraction
+// 0.5 KB (2.5 KB) to compile. A deeper expression is a syntax error rather than
+// a stack overflow, which would abort the process. At the limit, compiling
+// takes less than 400 KB of stack in a debug build, under a fifth of the 2 MB
+// a spawned thread has, and matching less than 150 KB. The deepest expressions
+// in the W3C XML Schema test suite, URI and IRI patterns derived from RFC 3986
+// and RFC 3987, nest 15 levels deep.
+const MAX_NESTING_DEPTH: usize = 64;
+
+// The message of the nesting limit's `Error::Syntax`, which `Error::kind`
+// recognizes as `ErrorKind::NestingTooDeep`.
+fn nesting_too_deep_message() -> String {
+    format!(
+        "Groups and character classes nested more than {} levels deep",
+        MAX_NESTING_DEPTH
+    )
+}
+
+// The start of the message of an unknown block name's `Error::Syntax`
+// (`category::BlockLookup::lookup`), which `Error::kind` recognizes as
+// `ErrorKind::UnknownBlock` when the name is a well-formed one.
+pub(crate) const UNKNOWN_BLOCK_PREFIX: &str = "Unknown Unicode block: ";
 
 pub(crate) struct ReCompiler {
     // Input state for compiling regular expression
@@ -48,18 +75,29 @@ pub(crate) struct ReCompiler {
 
     captures: HashSet<usize>,
     has_back_references: bool,
+    // the groups back-references refer to
+    back_referenced_groups: Vec<usize>,
+
+    // current nesting of groups and character classes
+    nesting_depth: usize,
 
     re_flags: ReFlags,
 }
 
 /// Regular expression error
+///
+/// [`Error::kind`] classifies it further, for a caller that maps errors to
+/// its own codes; [`Display`](std::fmt::Display) gives the message.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Error {
     /// Internal error
     Internal,
     /// Invalid flags (FORX0001)
     InvalidFlags(String),
-    /// Syntax error (FORX0002)
+    /// Syntax error (FORX0002). Also reported for an expression that nests
+    /// groups and character classes more than 64 levels deep
+    /// ([`ErrorKind::NestingTooDeep`]) and for an unknown block name
+    /// ([`ErrorKind::UnknownBlock`]).
     Syntax(String),
     /// Pattern matches an empty string (FORX0003)
     MatchesEmptyString,
@@ -67,11 +105,113 @@ pub enum Error {
     InvalidReplacementString(String),
 }
 
+/// The kind of an [`Error`], from [`Error::kind`].
+///
+/// Each [`Error`] variant has a kind of its own, and a syntax error that a
+/// caller may want to treat differently from the others has a more specific
+/// one. More kinds may be added; a match on this enum needs a wildcard arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ErrorKind {
+    /// The flags are not valid ([`Error::InvalidFlags`]; FORX0001 in F&O).
+    InvalidFlags,
+    /// The pattern is not a valid regular expression ([`Error::Syntax`];
+    /// FORX0002), for a reason that has no kind of its own.
+    Syntax,
+    /// Groups and character classes are nested more than 64 levels deep (an
+    /// [`Error::Syntax`]). The limit protects the stack: compiling and
+    /// matching recurse once per level. The expression may be valid, so a
+    /// caller may report this as an implementation limit rather than a
+    /// syntax error.
+    NestingTooDeep,
+    /// A block escape `\p{IsX}` or `\P{IsX}` names a block that is not known,
+    /// with a well-formed name X (`[a-zA-Z0-9-]+`) (an [`Error::Syntax`]).
+    /// XML Schema 1.1 Part 2 §G.4.2.4 makes such an escape denote the set of
+    /// all characters; compiling with the `;k` flag does that (see
+    /// [`Regex::xsd`](crate::Regex::xsd)). F&O 3.1 §5.6.1.5 makes it an error
+    /// (FORX0002).
+    UnknownBlock,
+    /// The regular expression matches the zero-length string, which
+    /// [`Regex::replace_all`](crate::Regex::replace_all),
+    /// [`Regex::tokenize`](crate::Regex::tokenize) and
+    /// [`Regex::analyze`](crate::Regex::analyze) do not allow
+    /// ([`Error::MatchesEmptyString`]; FORX0003).
+    MatchesEmptyString,
+    /// The replacement string is not valid
+    /// ([`Error::InvalidReplacementString`]; FORX0004).
+    InvalidReplacement,
+    /// An internal error of the engine ([`Error::Internal`]).
+    Internal,
+}
+
 impl Error {
     pub(crate) fn syntax(s: impl Into<String>) -> Error {
         Error::Syntax(s.into())
     }
+
+    /// The kind of this error.
+    ///
+    /// ```
+    /// use regexml_fork::{ErrorKind, Regex};
+    ///
+    /// let error = Regex::xsd(r"\p{IsNoSuchBlock}", "").unwrap_err();
+    /// assert_eq!(error.kind(), ErrorKind::UnknownBlock);
+    /// assert!(Regex::xsd(r"\p{IsNoSuchBlock}", ";k").is_ok());
+    ///
+    /// let deep = format!("{}a{}", "(".repeat(65), ")".repeat(65));
+    /// assert_eq!(Regex::xpath(&deep, "").unwrap_err().kind(), ErrorKind::NestingTooDeep);
+    ///
+    /// assert_eq!(Regex::xpath("a", "z").unwrap_err().kind(), ErrorKind::InvalidFlags);
+    /// assert_eq!(Regex::xpath("(a", "").unwrap_err().kind(), ErrorKind::Syntax);
+    /// ```
+    ///
+    /// The kind of an [`Error::Syntax`] is decided from the message the
+    /// engine wrote into it, so an error built by a caller with the same
+    /// message has the same kind.
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Error::Internal => ErrorKind::Internal,
+            Error::InvalidFlags(_) => ErrorKind::InvalidFlags,
+            Error::Syntax(message) => {
+                if *message == nesting_too_deep_message() {
+                    ErrorKind::NestingTooDeep
+                } else if message
+                    .strip_prefix(UNKNOWN_BLOCK_PREFIX)
+                    .is_some_and(|name| {
+                        !name.is_empty()
+                            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                    })
+                {
+                    ErrorKind::UnknownBlock
+                } else {
+                    ErrorKind::Syntax
+                }
+            }
+            Error::MatchesEmptyString => ErrorKind::MatchesEmptyString,
+            Error::InvalidReplacementString(_) => ErrorKind::InvalidReplacement,
+        }
+    }
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Internal => f.write_str("internal error of the regular-expression engine"),
+            Error::InvalidFlags(message) => {
+                write!(f, "invalid regular-expression flags: {message}")
+            }
+            Error::Syntax(message) => write!(f, "invalid regular expression: {message}"),
+            Error::MatchesEmptyString => {
+                f.write_str("the regular expression matches the zero-length string")
+            }
+            Error::InvalidReplacementString(message) => {
+                write!(f, "invalid replacement string: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 enum CharacterClassOrBackReference {
     CharacterClass(CharacterClassBuilder),
@@ -96,8 +236,20 @@ impl ReCompiler {
             bracket_max: 0,
             captures: HashSet::new(),
             has_back_references: false,
+            back_referenced_groups: Vec::new(),
+            nesting_depth: 0,
             re_flags,
         }
+    }
+
+    // Called when a group or a character class opens; the caller decrements
+    // `nesting_depth` again when it closes.
+    fn enter_nesting(&mut self) -> Result<(), Error> {
+        self.nesting_depth += 1;
+        if self.nesting_depth > MAX_NESTING_DEPTH {
+            return Err(Error::syntax(nesting_too_deep_message()));
+        }
+        Ok(())
     }
 
     fn bracket(&mut self) -> Result<(), Error> {
@@ -210,8 +362,10 @@ impl ReCompiler {
                 Ok(CharacterClassBuilder::from_char(escape_char).into())
             }
             '$' => match self.re_flags.language() {
-                Language::XPath => Ok(CharacterClassBuilder::from_char('$').into()),
-                Language::XSD => Err(Error::syntax("In XSD, '$' must not be escaped")),
+                Language::XPath | Language::XPath20 => {
+                    Ok(CharacterClassBuilder::from_char('$').into())
+                }
+                Language::Xsd => Err(Error::syntax("In XSD, '$' must not be escaped")),
             },
             's' => Ok(escape_s.into()),
             'S' => Ok(escape_s.complement().into()),
@@ -283,12 +437,29 @@ impl ReCompiler {
                     }
                 } else if block.starts_with(&['I', 's']) {
                     let name = block[2..].iter().collect::<String>();
-                    // TODO: obey isAllowUnknownBlockNames to follow XSD spec
-                    // (which doesn't make this an error; original source code
-                    // issues a warning)
-                    let cc = CharacterClassBuilder::CodePointInversionListBuilder(category::block(
-                        &name,
-                    )?);
+                    let builder = match category::block(&name) {
+                        Ok(builder) => builder,
+                        // XSD 1.1 Part 2 §G.4.2.4: "If a string "IsX" matches
+                        // the non-terminal IsBlock but X is not a recognized
+                        // block name, then the expressions "\p{IsX}" and
+                        // "\P{IsX}" each denote the set of all characters."
+                        // IsBlock is 'Is' [a-zA-Z0-9#x2D]+
+                        Err(_)
+                            if self.re_flags.is_allow_unknown_block_names()
+                                && block[2..]
+                                    .iter()
+                                    .all(|c| c.is_ascii_alphanumeric() || *c == '-') =>
+                        {
+                            self.idx = close + 1;
+                            let mut all = CodePointInversionListBuilder::new();
+                            all.add_range32(&(0x0000..=0x10FFFF));
+                            return Ok(
+                                CharacterClassBuilder::CodePointInversionListBuilder(all).into()
+                            );
+                        }
+                        Err(e) => return Err(e),
+                    };
+                    let cc = CharacterClassBuilder::CodePointInversionListBuilder(builder);
                     self.idx = close + 1;
                     if escape_char == 'p' {
                         Ok(cc.into())
@@ -317,7 +488,7 @@ impl ReCompiler {
                         "Backreferences not allowed within character classes",
                     ));
                 }
-                if self.re_flags.language() != Language::XPath {
+                if !self.re_flags.language().is_xpath() {
                     return Err(Error::syntax("digit not allowed after \\"));
                 }
                 let mut back_ref = (escape_char as usize) - ('0' as usize);
@@ -346,6 +517,9 @@ impl ReCompiler {
                     )));
                 }
                 self.has_back_references = true;
+                if !self.back_referenced_groups.contains(&back_ref) {
+                    self.back_referenced_groups.push(back_ref);
+                }
                 Ok(CharacterClassOrBackReference::BackReference(back_ref))
             }
             escape_char => Err(Error::syntax(format!(
@@ -360,6 +534,8 @@ impl ReCompiler {
         if self.pattern[self.idx] != '[' {
             return Err(Error::Internal);
         }
+
+        self.enter_nesting()?;
 
         // check for unterminated or empty class
         self.idx += 1;
@@ -530,6 +706,7 @@ impl ReCompiler {
         if let Some(subtrahend) = subtrahend {
             result = result.difference(subtrahend);
         }
+        self.nesting_depth -= 1;
         Ok(result)
     }
 
@@ -601,7 +778,7 @@ impl ReCompiler {
                     }
                 }
                 c => {
-                    if (c == '^' || c == '$') && self.re_flags.language() == Language::XPath {
+                    if (c == '^' || c == '$') && self.re_flags.language().is_xpath() {
                         break;
                     }
                     ub.push(self.pattern[self.idx]);
@@ -622,13 +799,13 @@ impl ReCompiler {
     fn parse_terminal(&mut self, flags: &[u32]) -> Result<Operation, Error> {
         match self.pattern[self.idx] {
             '$' => {
-                if self.re_flags.language() == Language::XPath {
+                if self.re_flags.language().is_xpath() {
                     self.idx += 1;
                     return Ok(Operation::from(Eol));
                 }
             }
             '^' => {
-                if self.re_flags.language() == Language::XPath {
+                if self.re_flags.language().is_xpath() {
                     self.idx += 1;
                     return Ok(Operation::from(Bol));
                 }
@@ -641,7 +818,13 @@ impl ReCompiler {
                 } else {
                     let mut inv_list = CodePointInversionListBuilder::new();
                     inv_list.add_char('\n');
-                    inv_list.add_char('\r');
+                    // XSD 1.1 Part 2 §G.4.2.5 and F&O 3.1 §5.6.2 exclude #xD
+                    // as well; F&O 1.0 §7.6.1.1: "If the s flag is not
+                    // specified, the meta-character . matches any character
+                    // except a newline (#x0A) character."
+                    if self.re_flags.language() != Language::XPath20 {
+                        inv_list.add_char('\r');
+                    }
                     inv_list.complement();
                     let inv_list = inv_list.build();
                     CharClass::new(CharacterClass::new(inv_list))
@@ -731,6 +914,11 @@ impl ReCompiler {
                     || quantifier_type == Some('*')
                     || (quantifier_type == Some('{') && self.bracket_min == 0)
                 {
+                    // a `?` that makes the quantifier reluctant is part of it
+                    // (`$??`), not a quantifier of its own
+                    if self.idx < self.len && self.pattern[self.idx] == '?' {
+                        self.idx += 1;
+                    }
                     return Ok(Operation::from(Nothing));
                 } else {
                     quantifier_type = None
@@ -747,10 +935,6 @@ impl ReCompiler {
                         // '*' and '+' are equivalent
                         quantifier_type = Some('*');
                     }
-                    Some('{') => {
-                        // bounds are meaningless
-                        quantifier_type = Some('*')
-                    }
                     _ => {}
                 }
             }
@@ -760,7 +944,7 @@ impl ReCompiler {
 
         // if the next character is a '?', make the quantifier non-greedy (reluctant)
         if self.idx < self.len && self.pattern[self.idx] == '?' {
-            if self.re_flags.language() == Language::XSD {
+            if self.re_flags.language() == Language::Xsd {
                 return Err(Error::syntax("Reluctant quantifier not allowed in XSD"));
             }
             self.idx += 1;
@@ -803,20 +987,40 @@ impl ReCompiler {
                         max,
                         match_length,
                     )))
-                } else {
-                    // otherwise need to match with nothing
+                } else if min == 0 {
+                    // an operand that only matches the empty string (an
+                    // anchor, an empty group): zero repetitions match the
+                    // empty string, which is all any repetition can match
                     Ok(Operation::from(Nothing))
+                } else {
+                    // at least one repetition: the operand once, since every
+                    // further repetition tests the same position again. (It
+                    // used to become nothing at all, so `a($)+b` matched "ab".)
+                    Ok(ret)
                 }
             } else {
                 Ok(Operation::from(Repeat::new(ret, min, max, true)))
             }
         } else if let Some(match_length) = ret.get_match_length() {
-            Ok(Operation::from(ReluctantFixed::new(
-                ret,
-                min,
-                max,
-                match_length,
-            )))
+            if match_length > 0 {
+                Ok(Operation::from(ReluctantFixed::new(
+                    ret,
+                    min,
+                    max,
+                    match_length,
+                )))
+            } else if min == 0 {
+                // as in the greedy case: zero repetitions match all that any
+                // repetition of an operand that only matches the empty string
+                // can match
+                Ok(Operation::from(Nothing))
+            } else {
+                // the operand once. A `ReluctantFixed` of length 0 offered the
+                // same position again for every further repetition, up to
+                // `max` (`usize::MAX` for `+?`) of them, so a pattern such as
+                // `^(?:()+?)$` never finished on "a".
+                Ok(ret)
+            }
         } else {
             Ok(Operation::from(Repeat::new(ret, min, max, false)))
         }
@@ -853,6 +1057,17 @@ impl ReCompiler {
         let close_parens = self.capturing_open_paren_count;
         let mut capturing = true;
         if (compiler_flags[0] & NODE_TOPLEVEL) == 0 && self.pattern[self.idx] == '(' {
+            // In the XPath 2.0 grammar `(` always opens a capturing group,
+            // followed by a branch, and `?` is a quantifier that needs an atom
+            // before it: nothing may start with `(?`. Non-capturing groups
+            // came with F&O 3.0.
+            if self.re_flags.language() == Language::XPath20
+                && self.pattern.get(self.idx + 1) == Some(&'?')
+            {
+                return Err(Error::syntax(
+                    "'(?' is not allowed in XPath 2.0: there are no non-capturing groups",
+                ));
+            }
             // if it's a cluster (rather than a proper subexpression ie with backrefs)
             if (self.idx + 2) < self.len
                 && self.pattern[self.idx + 1] == '?'
@@ -870,6 +1085,7 @@ impl ReCompiler {
                 group = self.capturing_open_paren_count;
                 self.capturing_open_paren_count += 1;
             }
+            self.enter_nesting()?;
         }
         let mut compiler_flags = compiler_flags.to_vec();
         compiler_flags[0] &= !NODE_TOPLEVEL;
@@ -899,6 +1115,7 @@ impl ReCompiler {
                 op = Operation::from(Capture::new(group, op));
                 self.captures.insert(close_parens);
             }
+            self.nesting_depth -= 1;
         } else {
             op = Self::make_sequence(op, Operation::from(EndProgram));
         }
@@ -967,6 +1184,10 @@ impl ReCompiler {
                 let mut sb = Vec::new();
                 let mut nesting = 0;
                 let mut escaped = false;
+                // F&O 1.0 §7.6.1.1 and F&O 3.1 §5.6.2: "whitespace characters
+                // (#x9, #xA, #xD and #x20) in the regular expression are
+                // removed" — those four only, so a form feed (#xC) stays
+                let is_removed = |ch: char| matches!(ch, '\u{9}' | '\u{A}' | '\u{D}' | ' ');
                 for ch in self.pattern.iter() {
                     match ch {
                         '\\' if !escaped => {
@@ -982,8 +1203,7 @@ impl ReCompiler {
                             sb.push(*ch);
                         }
                         _ => {
-                            // TODO: wrong whitespace
-                            if nesting == 0 && ch.is_ascii_whitespace() {
+                            if nesting == 0 && is_removed(*ch) {
                                 // no action
                             } else {
                                 escaped = false;
@@ -1009,7 +1229,8 @@ impl ReCompiler {
                 }
                 return Err(Error::syntax("Unexpected input remains"));
             }
-            let operation = operation.optimize(&self.re_flags);
+            let mut operation = operation.optimize(&self.re_flags);
+            operation.mark_nested(Within::Nothing);
 
             let mut program = ReProgram::new(
                 self.pattern,
@@ -1020,6 +1241,7 @@ impl ReCompiler {
             if self.has_back_references {
                 program.optimization_flags |= OPT_HASBACKREFS;
             }
+            program.back_referenced_groups = self.back_referenced_groups;
             Ok(program)
         }
     }
@@ -1028,18 +1250,29 @@ impl ReCompiler {
         op0: &Operation,
         op1: &Operation,
         case_blind: bool,
+        multi_line: bool,
         reluctant: bool,
     ) -> bool {
         if matches!(op1, Operation::EndProgram(_)) {
             return !reluctant;
         }
-        if matches!(op1, Operation::Bol(_)) || matches!(op1, Operation::Eol(_)) {
-            return true;
+        // `^` after the repetition holds at the start (or, with `m`, after a
+        // newline): fewer repetitions may reach a position where it holds,
+        // so it is no reason to take as many as possible (`a*^a` on "a").
+        if matches!(op1, Operation::Bol(_)) {
+            return false;
         }
-        if let Some(repeat_operation) = op1.repeat_operation() {
-            if repeat_operation.min() == 0 {
-                return false;
-            }
+        // `$` holds at the end (or, with `m`, before a newline): fewer
+        // repetitions of an operand that cannot match a newline end before a
+        // character that is not one, where it does not hold.
+        if matches!(op1, Operation::Eol(_)) {
+            return !multi_line || !op0.get_initial_character_class(case_blind).contains('\n');
+        }
+        // A next operation that can match the empty string lets whatever
+        // follows it start right after the repetition, and that is not looked
+        // at here (`a*(?:(?:xy|x)*|z)a` on "aa").
+        if op1.matches_empty_string() != MATCHES_ZLS_NEVER {
+            return false;
         }
         let c0 = op0.get_initial_character_class(case_blind);
         let c1 = op1.get_initial_character_class(case_blind);

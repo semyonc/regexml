@@ -1,5 +1,5 @@
 use crate::{
-    operation::{Operation, OperationControl},
+    operation::{Operation, OperationControl, Within},
     re_flags::ReFlags,
     re_matcher::ReMatcher,
     re_program::OPT_HASBACKREFS,
@@ -8,7 +8,7 @@ use crate::{
 // Open paren (captured group) within a regular expression
 #[derive(Debug, Clone)]
 pub(crate) struct Capture {
-    group_nr: usize,
+    pub(crate) group_nr: usize,
     pub(crate) child_op: Box<Operation>,
 }
 
@@ -46,8 +46,16 @@ impl OperationControl for Capture {
         matcher: &'a ReMatcher<'a>,
         position: usize,
     ) -> Box<dyn Iterator<Item = usize> + 'a> {
+        if matcher.answer_only() {
+            // nothing reads what the group captures: no back-references,
+            // and the caller only asks whether there is a match
+            return self.child_op.matches_iter(matcher, position);
+        }
+        // everything this attempt captures, here and inside the group, is
+        // logged after this mark
+        let mark = matcher.trail_mark();
         if (matcher.program.optimization_flags & OPT_HASBACKREFS) != 0 {
-            matcher.set_start_backref(self.group_nr, Some(position));
+            matcher.open_backref(self.group_nr, position);
         }
         let basis = self.child_op.matches_iter(matcher, position);
 
@@ -56,11 +64,21 @@ impl OperationControl for Capture {
             basis,
             self.group_nr,
             position,
+            mark,
         ))
     }
 
     fn children(&self) -> Vec<Operation> {
         vec![self.child_op.as_ref().clone()]
+    }
+
+    fn collect_groups(&self, groups: &mut Vec<usize>) {
+        groups.push(self.group_nr);
+        self.child_op.collect_groups(groups);
+    }
+
+    fn mark_nested(&mut self, within: Within) {
+        self.child_op.mark_nested(within);
     }
 }
 
@@ -69,6 +87,8 @@ struct CaptureGroupIterator<'a> {
     basis: Box<dyn Iterator<Item = usize> + 'a>,
     group_nr: usize,
     position: usize,
+    // the capture log's length when this attempt began
+    mark: usize,
 }
 
 impl<'a> CaptureGroupIterator<'a> {
@@ -77,12 +97,14 @@ impl<'a> CaptureGroupIterator<'a> {
         basis: Box<dyn Iterator<Item = usize> + 'a>,
         group_nr: usize,
         position: usize,
+        mark: usize,
     ) -> Self {
         Self {
             matcher,
             basis,
             group_nr,
             position,
+            mark,
         }
     }
 }
@@ -91,21 +113,21 @@ impl Iterator for CaptureGroupIterator<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let next = self.basis.next()?;
+        let Some(next) = self.basis.next() else {
+            // The group cannot match here (any more): put back what it and
+            // the groups inside it held before this attempt, so that a group
+            // keeps the last substring it matched on the path that is still
+            // being followed, or stays unmatched.
+            self.matcher.undo_to(self.mark);
+            return None;
+        };
 
         // Increase valid paren count
         if self.group_nr >= self.matcher.paren_count() {
             self.matcher.set_paren_count(self.group_nr + 1);
         }
 
-        self.matcher.set_paren_start(self.group_nr, self.position);
-        self.matcher.set_paren_end(self.group_nr, next);
-
-        if (self.matcher.program.optimization_flags & OPT_HASBACKREFS) != 0 {
-            self.matcher
-                .set_start_backref(self.group_nr, Some(self.position));
-            self.matcher.set_end_backref(self.group_nr, Some(next));
-        }
+        self.matcher.capture(self.group_nr, self.position, next);
         Some(next)
     }
 }

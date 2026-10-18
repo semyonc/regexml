@@ -56,7 +56,7 @@ fn main() {
     .unwrap();
     writeln!(stdout).unwrap();
 
-    writeln!(stdout, "use regexml::Regex;").unwrap();
+    writeln!(stdout, "use regexml_fork::Regex;").unwrap();
     writeln!(stdout).unwrap();
     for test in &tests {
         // There are a bunch of weirdo expected results in the original XML file, which

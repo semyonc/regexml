@@ -1,5 +1,5 @@
 use crate::{
-    operation::{Operation, OperationControl, RepeatOperation, MATCHES_ZLS_ANYWHERE},
+    operation::{Operation, OperationControl, RepeatOperation, Within, MATCHES_ZLS_ANYWHERE},
     re_flags::ReFlags,
     re_matcher::ReMatcher,
 };
@@ -94,6 +94,14 @@ impl OperationControl for UnambiguousRepeat {
 
     fn children(&self) -> Vec<Operation> {
         vec![self.operation.as_ref().clone()]
+    }
+
+    fn collect_groups(&self, groups: &mut Vec<usize>) {
+        self.operation.collect_groups(groups);
+    }
+
+    fn mark_nested(&mut self, _within: Within) {
+        self.operation.mark_nested(Within::Nested);
     }
 }
 
