@@ -76,7 +76,7 @@ the `x` flag removed. The additions change nothing that was there before: `Regex
 contributed by [helping-kaiser](https://github.com/helping-kaiser) in Paligo/regexml#15), `Regex::xpath20` (the
 XPath 2.0 dialect of F&O 1.0 §7.6.1: no `(?:…)`, the flags `s`, `m`, `i` and `x` only, and `.` excluding only
 #xA) and `Error::kind` (an `ErrorKind` to match on instead of the error's text). The
-[CHANGELOG](https://github.com/semyonc/regexml/blob/fork/regexml/CHANGELOG.md) lists each change.
+[CHANGELOG](https://github.com/semyonc/regexml/blob/main/regexml/CHANGELOG.md) lists each change.
 
 ## Origins
 
@@ -112,5 +112,5 @@ Jakarta Regexp (Apache-2.0); files derived from the Saxon code remain subject to
 version of `regexml`: the changes are recorded in the repository's history and CHANGELOG. The package carries the
 licence texts (`LICENSE-APACHE`, `LICENSE-MPL2`) and the full notices — including the Unicode data license and the
 W3C test-suite license — in the
-[`COPYRIGHT`](https://github.com/semyonc/regexml/blob/fork/COPYRIGHT) and
-[`CREDITS.txt`](https://github.com/semyonc/regexml/blob/fork/CREDITS.txt) files, kept unchanged from `regexml`.
+[`COPYRIGHT`](https://github.com/semyonc/regexml/blob/main/COPYRIGHT) and
+[`CREDITS.txt`](https://github.com/semyonc/regexml/blob/main/CREDITS.txt) files, kept unchanged from `regexml`.
