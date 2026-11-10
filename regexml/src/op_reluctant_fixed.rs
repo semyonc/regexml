@@ -12,10 +12,10 @@ use crate::{
 // the repeated unit is fixed.
 #[derive(Debug, Clone)]
 pub(crate) struct ReluctantFixed {
-    operation: Box<Operation>,
+    pub(crate) operation: Box<Operation>,
     pub(crate) min: usize,
-    max: usize,
-    len: usize,
+    pub(crate) max: usize,
+    pub(crate) len: usize,
     // whether it is in the operand of a repetition that is not nested, with
     // only sequences, choices and groups in between (`ReMatcher::covered`)
     covered: bool,
@@ -36,14 +36,15 @@ impl ReluctantFixed {
 impl OperationControl for ReluctantFixed {
     fn get_match_length(&self) -> Option<usize> {
         if self.min == self.max {
-            Some(self.min * self.len)
+            Some(self.min.saturating_mul(self.len))
         } else {
             None
         }
     }
 
     fn get_minimum_match_length(&self) -> usize {
-        self.min * self.operation.get_minimum_match_length()
+        self.min
+            .saturating_mul(self.operation.get_minimum_match_length())
     }
 
     fn matches_empty_string(&self) -> u32 {

@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.4.0 — `regexml-fork`, unreleased
+
+The public API is unchanged from 0.3.0: no item is added or removed. This is 0.4.0 and not 0.3.1 because the minimum
+supported Rust version rises from 1.85 to 1.88 and the character data changes with ICU4X 2.4 (Unicode 18.0), so a
+project that depends on `regexml-fork = "0.3"` keeps 0.3.0 until it opts in. Besides those, three wrong answers are
+fixed, and `is_match` and `is_full_match` are faster.
+
+### Changed (behaviour that was wrong in 0.3.0)
+
+- **Under the `i` flag, a repetition followed by a literal whose first character has no case variants no longer
+  rejects matches.** Everyday case-blind expressions matched nothing: `.*\.xml` on "file.XML" (and on "file.xml"),
+  `.*1` on "a1", `\d*5` on "55", `[a-z\-]*-1` on "a-1", `\S+@\S+` on "a@b", `.+,.+` on "a,b", `.*/` on "a/b/",
+  `\s*\(.*\)` on " (x)" were all false for `is_match` and `is_full_match` in 0.3.0, and `replace_all` left the input
+  unchanged; so did `tokenize` and `analyze`. The trigger is any repetition followed by a literal whose first
+  character has an ICU case closure disjoint from the repeated class, which is always so for a character without
+  case variants (a digit, a punctuation mark), whose closure is empty; literals with case variants were caught too,
+  `a*A` on "aA", `a?A` on "A", `i*İ` on "İ" (U+0130). The compiler makes a repetition possessive (it keeps as many
+  repetitions as it can, never fewer) when what follows cannot start with a character the repetition can match, and
+  judged that from the ICU case closure of the literal's first character: but a closure leaves out the character
+  itself ('a' gives {'A'}, '.' gives nothing), and literals compare under `i` by their simple lowercase mappings, by
+  which 'i' matches 'İ' although neither is in the other's closure. So `.*` took the ".xml" that the literal after it
+  needed, and `a*A` the 'A'. The first character of a case-blind literal now counts as any character for that
+  judgement, so such a repetition stays an ordinary one; character classes, whose case variants are added when they
+  are compiled, are judged as before. Without `i` nothing changes.
+- **The empty pattern with the `q` flag matches the empty string as a whole**: `Regex::xpath("", "q")
+  .is_full_match("")` was false (and `is_match("")` true). The check that a literal the expression needs occurs in
+  the input looked at every position but the end, where an empty literal occurs too.
+- **Repetition counts near the largest `usize` no longer wrap around**: the lengths computed from them (the
+  shortest match of an expression, a fixed-length repetition's furthest end) saturate. `..(ab){1,9223372036854775807}`
+  rejected "zzab" in an optimized build, `abc(x){18446744073709551613}` panicked on "" (index out of bounds), and a
+  debug build panicked when compiling such counts. On a 32-bit target `(ab){1,2147483647}` already wrapped.
+
+### Changed
+
+- **ICU4X 2.4** (`icu_casemap`, `icu_collections` and `icu_properties` 2.4 or later, was 1.5), **and with it the
+  character data of Unicode 18.0 instead of 15.1.** The category escapes `\p{…}` and `\P{…}`, `\d`, `\w` and their
+  complements, and case-blind matching under the `i` flag, see the characters assigned since 15.1: `\p{L}` holds
+  158,172 code points instead of 136,726, `\p{Lu}` 1,906 instead of 1,831, `\p{Nd}` 770 instead of 680, and `\w`
+  gains 22,977 characters, all of them unassigned in 15.1 (U+1C89 CYRILLIC CAPITAL LETTER TJE, for one, is now in
+  `\p{Lu}`). Among the characters assigned in 15.1 exactly two change category: U+0295 LATIN LETTER PHARYNGEAL VOICED
+  FRICATIVE from `Ll` to `Lo` (so `\p{Ll}` no longer matches it) and U+1171E, an Ahom consonant sign, from `Mn` to
+  `Mc`. Case-blind matching gains pairs only for capitals added since 15.1 (U+019B with U+A7DC, U+0264 with U+A7CB,
+  for example). `\s`, `\i`, `\c` and `.` do not change, nor do the block escapes (`\p{IsBasicLatin}`), which come
+  from the crate's own block table. The requirements are carets, so a project that already depends on ICU4X 2
+  (through `url` and `idna`, for example) now builds one copy of it instead of two, and `zerovec` 0.10, which the 1.5
+  crates brought, is no longer in the dependency graph. **The minimum supported Rust version is 1.88**, which ICU4X
+  2.4 needs: with Cargo's default resolver every ICU4X 2 requirement takes 2.4 (even `~2.2.0` brings `icu_provider`
+  and `icu_locale_core` 2.4, which the 2.2 crates require with a caret), so no lower minimum would build without
+  resolving with `rust-version` in mind, and with 2.4 as the floor the character data is that of Unicode 18.0 in
+  every build.
+
+### Performance
+
+- **`is_match` and `is_full_match` answer from sets of positions, without backtracking and without allocating, for
+  haystacks of up to 127 characters.** When only the answer counts and the expression has no back-reference and no
+  `^` or `$` (always so in the XSD dialect, where they are ordinary characters), whether the haystack matches is
+  whether it is in the language of the expression (XML Schema 1.1 Part 2 appendix G: S{n,m} denotes "all
+  concatenations of at least n, and at most m, strings from L(S)"), whatever order the matcher would try the
+  alternatives and repetition counts in. For each operation, the evaluator computes the positions where a match of
+  it can end from a set of positions where it starts, a `u128` with a bit per position of the haystack, whose
+  characters are copied to the stack. A repetition takes at most n + 2 steps for its minimum and n + 1 beyond it for
+  a haystack of n characters, whatever its bounds (`(a?){5000}` included), and a repeated atom or character class is
+  one mask and one shift per repetition. The mask is filled in as the repetition goes: each position is looked up
+  once, when a repetition first starts from it, except those its minimum goes through, which are looked up in one
+  pass; so a repetition costs the characters it reaches, and `\w+` inside an outer repetition does not look at the
+  rest of the haystack at every outer step. Nested repetitions multiply their steps, so one answer may take at most
+  2,048 evaluations of an operation (the NF-e date and time pattern below takes 112), after which the matcher
+  answers: deeply nested repetitions such as `((((a){1,2}){1,2}){1,2})…` cost well under a millisecond before it
+  takes over. As the matcher does, a haystack shorter than the shortest match is rejected at once. The possessive
+  repetitions the compiler makes where it judges that fewer repetitions cannot lead to a match are computed as the
+  matcher runs them, so the answers stay the matcher's; the case-blind comparison of characters (`i`) is one
+  function that both use. Longer haystacks, back-references, and `^` and `$` in the XPath dialects, go to the
+  matcher as before; whether an expression qualifies is decided once, when the `Regex` is made. A differential test
+  generates 112,339 random expression and haystack pairs, of which 106,828 are answered by the sets of positions
+  (2.50 and 2.37 million in an optimized run), compares the two answers, and compares both with an evaluator of the
+  generated expressions themselves, which is how the first of the fixes above was found: no difference. On 21
+  values of the `pattern` facets of the Brazilian NF-e schema, optimized build, per `is_full_match`: 899 → 107 ns on
+  average and 30 → 0 allocations; `[0-9]{44}` on a 44-digit access key 3.9 µs, 115 allocations and 14 KB → 0.20 µs
+  and none; the `TDateTimeUTC` pattern 2.6 → 0.51 µs. Lists of words or numbers, where the sets of positions gain
+  least, still gain: `(\w+\s?)+` on 126 characters of one-letter words 14 → 6.4 µs, `((\+|-)?\d+(\.\d+)?\s*)+` on
+  115 characters of numbers 17 → 6.1 µs. Validating a 762 KB NF-e document against that schema with the
+  `xsd-schema` crate (streaming) takes 50.7 → 32.6 ms, with 945,398 → 278,404 allocations.
+
 ## 0.3.0 — `regexml-fork`, unreleased
 
 The first release of **`regexml-fork`**, an unofficial fork of regexml 0.2.2 (not affiliated with or endorsed by

@@ -4,8 +4,8 @@ use ahash::HashMap;
 use ahash::HashMapExt;
 use icu_collections::codepointinvlist::CodePointInversionList;
 use icu_collections::codepointinvlist::CodePointInversionListBuilder;
-use icu_properties::sets;
-use icu_properties::GeneralCategoryGroup;
+use icu_properties::props::{GeneralCategory, GeneralCategoryGroup};
+use icu_properties::CodePointMapData;
 
 use crate::block;
 use crate::re_compiler::UNKNOWN_BLOCK_PREFIX;
@@ -79,7 +79,8 @@ fn category_index(property: &str) -> Result<usize, Error> {
 
 fn category_set(index: usize) -> &'static CodePointInversionList<'static> {
     CATEGORY_SETS[index].get_or_init(|| {
-        sets::for_general_category_group(CATEGORY_GROUPS[index].1)
+        CodePointMapData::<GeneralCategory>::new()
+            .get_set_for_value_group(CATEGORY_GROUPS[index].1)
             .to_code_point_inversion_list()
             .into_owned()
     })
@@ -108,20 +109,20 @@ pub(crate) fn name_start_char() -> CodePointInversionListBuilder {
     let mut builder = CodePointInversionListBuilder::new();
     builder.add_char(':');
     builder.add_char('_');
-    builder.add_range(&('A'..='Z'));
-    builder.add_range(&('a'..='z'));
-    builder.add_range(&('\u{C0}'..='\u{D6}'));
-    builder.add_range(&('\u{D8}'..='\u{F6}'));
-    builder.add_range(&('\u{F8}'..='\u{2FF}'));
-    builder.add_range(&('\u{370}'..='\u{37D}'));
-    builder.add_range(&('\u{37F}'..='\u{1FFF}'));
-    builder.add_range(&('\u{200C}'..='\u{200D}'));
-    builder.add_range(&('\u{2070}'..='\u{218F}'));
-    builder.add_range(&('\u{2C00}'..='\u{2FEF}'));
-    builder.add_range(&('\u{3001}'..='\u{D7FF}'));
-    builder.add_range(&('\u{F900}'..='\u{FDCF}'));
-    builder.add_range(&('\u{FDF0}'..='\u{FFFD}'));
-    builder.add_range(&('\u{10000}'..='\u{EFFFF}'));
+    builder.add_range('A'..='Z');
+    builder.add_range('a'..='z');
+    builder.add_range('\u{C0}'..='\u{D6}');
+    builder.add_range('\u{D8}'..='\u{F6}');
+    builder.add_range('\u{F8}'..='\u{2FF}');
+    builder.add_range('\u{370}'..='\u{37D}');
+    builder.add_range('\u{37F}'..='\u{1FFF}');
+    builder.add_range('\u{200C}'..='\u{200D}');
+    builder.add_range('\u{2070}'..='\u{218F}');
+    builder.add_range('\u{2C00}'..='\u{2FEF}');
+    builder.add_range('\u{3001}'..='\u{D7FF}');
+    builder.add_range('\u{F900}'..='\u{FDCF}');
+    builder.add_range('\u{FDF0}'..='\u{FFFD}');
+    builder.add_range('\u{10000}'..='\u{EFFFF}');
     builder
 }
 
@@ -129,10 +130,10 @@ pub(crate) fn name_char() -> CodePointInversionListBuilder {
     let mut builder = name_start_char();
     builder.add_char('-');
     builder.add_char('.');
-    builder.add_range(&('0'..='9'));
+    builder.add_range('0'..='9');
     builder.add_char('\u{B7}');
-    builder.add_range(&('\u{0300}'..='\u{036F}'));
-    builder.add_range(&('\u{203F}'..='\u{2040}'));
+    builder.add_range('\u{0300}'..='\u{036F}');
+    builder.add_range('\u{203F}'..='\u{2040}');
     builder
 }
 
@@ -145,7 +146,7 @@ pub(crate) fn decimal_number() -> CodePointInversionListBuilder {
 pub(crate) fn word_char() -> CodePointInversionListBuilder {
     let set = WORD_CHAR_SET.get_or_init(|| {
         let mut builder = CodePointInversionListBuilder::new();
-        builder.add_range32(&(0x0000..=0x10FFFF));
+        builder.add_range32(0x0000..=0x10FFFF);
         builder.remove_set(named_category_set("P"));
         builder.remove_set(named_category_set("Z"));
         builder.remove_set(named_category_set("C"));
@@ -201,28 +202,26 @@ pub(crate) fn block(name: &str) -> Result<CodePointInversionListBuilder, Error> 
     // but PrivateUse stretches three different ranges, so need special handling
     if name == "PrivateUse" {
         let mut builder = CodePointInversionListBuilder::new();
-        builder.add_range32(&(0xE000..=0xF8FF));
-        builder.add_range32(&(0xF0000..=0xFFFFD));
-        builder.add_range32(&(0x100000..=0x10FFFD));
+        builder.add_range32(0xE000..=0xF8FF);
+        builder.add_range32(0xF0000..=0xFFFFD);
+        builder.add_range32(0x100000..=0x10FFFD);
         return Ok(builder);
     }
 
     let lookup = block_lookup();
     let block = lookup.lookup(name)?;
     let mut builder = CodePointInversionListBuilder::new();
-    builder.add_range32(&(block.start..=block.end));
+    builder.add_range32(block.start..=block.end);
     Ok(builder)
 }
 
 #[cfg(test)]
 mod tests {
-    use icu_properties::maps;
-    use icu_properties::GeneralCategory;
-
     use super::*;
 
     fn from_icu(group: GeneralCategoryGroup) -> CodePointInversionList<'static> {
-        sets::for_general_category_group(group)
+        CodePointMapData::<GeneralCategory>::new()
+            .get_set_for_value_group(group)
             .to_code_point_inversion_list()
             .into_owned()
     }
@@ -252,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_decimal_number_set() {
-        let expected = maps::general_category()
+        let expected = CodePointMapData::<GeneralCategory>::new()
             .get_set_for_value(GeneralCategory::DecimalNumber)
             .to_code_point_inversion_list()
             .into_owned();
@@ -263,7 +262,7 @@ mod tests {
     #[test]
     fn test_word_char_set() {
         let mut builder = CodePointInversionListBuilder::new();
-        builder.add_range32(&(0x0000..=0x10FFFF));
+        builder.add_range32(0x0000..=0x10FFFF);
         builder.remove_set(&from_icu(GeneralCategoryGroup::Punctuation));
         builder.remove_set(&from_icu(GeneralCategoryGroup::Separator));
         builder.remove_set(&from_icu(GeneralCategoryGroup::Other));

@@ -38,7 +38,7 @@ touching its code by renaming the dependency:
 
 ```toml
 [dependencies]
-regexml = { package = "regexml-fork", version = "0.3" }
+regexml = { package = "regexml-fork", version = "0.4" }
 ```
 
 or use the crate under its own name:

@@ -20,6 +20,7 @@ mod op_repeat;
 mod op_sequence;
 mod op_unambiguous_repeat;
 mod operation;
+mod position_sets;
 mod re_compiler;
 mod re_flags;
 mod re_matcher;

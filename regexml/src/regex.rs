@@ -1,5 +1,6 @@
 #[cfg(test)]
 use crate::operation::Operation;
+use crate::position_sets;
 use crate::re_compiler::ReCompiler;
 use crate::re_flags::Language;
 use crate::re_flags::ReFlags;
@@ -14,6 +15,9 @@ pub use crate::re_compiler::Error;
 pub struct Regex {
     re_program: ReProgram,
     matches_empty_string: bool,
+    // whether `is_match` and `is_full_match` may be answered from sets of
+    // positions (`position_sets::supports`)
+    answer_from_positions: bool,
 }
 
 impl Regex {
@@ -25,9 +29,11 @@ impl Regex {
         // we need to check if the regex matches the empty string
         let mut matcher = ReMatcher::new_for_answer(&re_program, "");
         let matches_empty_string = matcher.is_match();
+        let answer_from_positions = position_sets::supports(&re_program);
         Ok(Self {
             re_program,
             matches_empty_string,
+            answer_from_positions,
         })
     }
 
@@ -105,6 +111,11 @@ impl Regex {
 
     /// Returns `true` if the argument matches this regular expression.
     pub fn is_match(&self, haystack: &str) -> bool {
+        if self.answer_from_positions {
+            if let Some(answer) = position_sets::is_match(&self.re_program, haystack) {
+                return answer;
+            }
+        }
         let mut matcher = ReMatcher::new_for_answer(&self.re_program, haystack);
         matcher.is_match()
     }
@@ -134,6 +145,11 @@ impl Regex {
     /// assert!(Regex::xsd("^a$", "").unwrap().is_full_match("^a$"));
     /// ```
     pub fn is_full_match(&self, haystack: &str) -> bool {
+        if self.answer_from_positions {
+            if let Some(answer) = position_sets::is_full_match(&self.re_program, haystack) {
+                return answer;
+            }
+        }
         // Captures cannot change the answer unless there are back-references,
         // which `new_for_answer` keeps track of.
         let mut matcher = ReMatcher::new_for_answer(&self.re_program, haystack);

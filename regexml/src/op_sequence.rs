@@ -27,15 +27,15 @@ impl Sequence {
 
 impl OperationControl for Sequence {
     fn get_match_length(&self) -> Option<usize> {
-        self.operations
-            .iter()
-            .try_fold(0, |acc, op| op.get_match_length().map(|len| acc + len))
+        self.operations.iter().try_fold(0usize, |acc, op| {
+            op.get_match_length().map(|len| acc.saturating_add(len))
+        })
     }
 
     fn get_minimum_match_length(&self) -> usize {
-        self.operations
-            .iter()
-            .fold(0, |acc, op| acc + op.get_minimum_match_length())
+        self.operations.iter().fold(0usize, |acc, op| {
+            acc.saturating_add(op.get_minimum_match_length())
+        })
     }
 
     fn get_initial_character_class(&self, case_blind: bool) -> CharacterClass {
