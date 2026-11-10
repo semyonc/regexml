@@ -12,10 +12,10 @@ use crate::{
 // repeated unit is fixed.
 #[derive(Debug, Clone)]
 pub(crate) struct GreedyFixed {
-    operation: Box<Operation>,
+    pub(crate) operation: Box<Operation>,
     pub(crate) min: usize,
-    max: usize,
-    len: usize,
+    pub(crate) max: usize,
+    pub(crate) len: usize,
     // whether it is in the operand of a repetition that is not nested, with
     // only sequences, choices and groups in between (`ReMatcher::covered`)
     covered: bool,
@@ -36,14 +36,15 @@ impl GreedyFixed {
 impl OperationControl for GreedyFixed {
     fn get_match_length(&self) -> Option<usize> {
         if self.min == self.max {
-            Some(self.min * self.len)
+            Some(self.min.saturating_mul(self.len))
         } else {
             None
         }
     }
 
     fn get_minimum_match_length(&self) -> usize {
-        self.min * self.operation.get_minimum_match_length()
+        self.min
+            .saturating_mul(self.operation.get_minimum_match_length())
     }
 
     fn matches_empty_string(&self) -> u32 {
@@ -83,7 +84,7 @@ impl OperationControl for GreedyFixed {
     ) -> Box<dyn Iterator<Item = usize> + 'a> {
         let mut guard = matcher.search.len();
         if self.max < usize::MAX {
-            guard = guard.min(position + self.len * self.max)
+            guard = guard.min(position.saturating_add(self.len.saturating_mul(self.max)))
         }
         if position >= guard && self.min > 0 {
             return Box::new(std::iter::empty());

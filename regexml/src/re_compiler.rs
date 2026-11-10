@@ -452,7 +452,7 @@ impl ReCompiler {
                         {
                             self.idx = close + 1;
                             let mut all = CodePointInversionListBuilder::new();
-                            all.add_range32(&(0x0000..=0x10FFFF));
+                            all.add_range32(0x0000..=0x10FFFF);
                             return Ok(
                                 CharacterClassBuilder::CodePointInversionListBuilder(all).into()
                             );
@@ -648,7 +648,7 @@ impl ReCompiler {
                         // almost certainly a mistake; and we have no way of
                         // indicating warnings.
                     }
-                    builder.add_range(&(start..=end));
+                    builder.add_range(start..=end);
                     if self.re_flags.is_case_independent() {
                         let cm = CaseMapCloser::new();
                         for c in start..=end {

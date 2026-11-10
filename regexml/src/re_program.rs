@@ -128,11 +128,11 @@ impl ReProgram {
                     }
                     self.add_precondition(o.clone(), fp, mp);
                     if let (Some(some_fp), Some(match_length)) = (fp, o.get_match_length()) {
-                        fp = Some(some_fp + match_length);
+                        fp = Some(some_fp.saturating_add(match_length));
                     } else {
                         fp = None;
                     }
-                    mp += o.get_minimum_match_length();
+                    mp = mp.saturating_add(o.get_minimum_match_length());
                 }
             }
             _ => {}

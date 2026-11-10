@@ -86,7 +86,7 @@ impl OperationControl for Repeat {
     fn get_match_length(&self) -> Option<usize> {
         self.operation.get_match_length().and_then(|match_length| {
             if self.min == self.max {
-                Some(self.min * match_length)
+                Some(self.min.saturating_mul(match_length))
             } else {
                 None
             }
@@ -94,7 +94,8 @@ impl OperationControl for Repeat {
     }
 
     fn get_minimum_match_length(&self) -> usize {
-        self.min * self.operation.get_minimum_match_length()
+        self.min
+            .saturating_mul(self.operation.get_minimum_match_length())
     }
 
     fn get_initial_character_class(&self, case_blind: bool) -> CharacterClass {

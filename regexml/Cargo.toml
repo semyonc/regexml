@@ -1,8 +1,8 @@
 [package]
 name = "regexml-fork"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["Regexml contributors"]
 license = "Apache-2.0 OR MPL-2.0"
 description = "Unofficial, maintained fork of regexml: an XML Schema 1.1 / XPath compliant regular-expression engine"
@@ -15,9 +15,18 @@ categories = ["text-processing"]
 [dependencies]
 ahash = "0.8.11"
 enum_dispatch = "0.3.13"
-icu_casemap = "1.5.1"
-icu_collections = "1.5.0"
-icu_properties = "1.5.1"
+# ICU4X 2.4 or later. 2.4 is the floor because every ICU4X 2 requirement
+# resolves to 2.4 under Cargo's default resolver anyway: even `~2.2.0` brings
+# `icu_provider` and `icu_locale_core` 2.4, which the 2.2 crates require with
+# a caret. So under the default resolver no ICU4X 2 build works below Rust
+# 1.88, which 2.4 needs, and naming 2.4 makes the character data (Unicode
+# 18.0) the same in every build. A caret, not a tilde, so that a project which already has ICU4X 2
+# (through `url` and `idna`, say) shares one copy with this crate.
+icu_casemap = "2.4.0"
+# `alloc`: `CodePointInversionListBuilder`, which builds every character class.
+icu_collections = { version = "2.4.0", features = ["alloc"] }
+# `alloc`: `get_set_for_value_group`, which builds the set of a general category group.
+icu_properties = { version = "2.4.0", features = ["alloc"] }
 
 [dev-dependencies]
 insta = { version = "1.42.2", features = ["yaml", "glob"] }

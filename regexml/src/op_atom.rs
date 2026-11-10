@@ -1,4 +1,3 @@
-use icu_casemap::CaseMapCloser;
 use icu_collections::codepointinvlist::CodePointInversionListBuilder;
 
 use crate::{
@@ -42,14 +41,22 @@ impl OperationControl for Atom {
             return CharacterClass::empty();
         }
 
-        let mut builder = CodePointInversionListBuilder::new();
         if case_blind {
-            // create a character class that has all case variants of the first character
-            let cm = CaseMapCloser::new();
-            cm.add_case_closure_to(self.atom[0], &mut builder);
-        } else {
-            builder.add_char(self.atom[0]);
+            // Under `i` an atom compares characters by their simple lowercase
+            // mappings (`re_matcher::equal_case_blind`), so its first
+            // character can be matched by characters that ICU's case closure
+            // does not give: the closure leaves out the character itself
+            // ('a' gives {'A'}), and 'i' matches U+0130 LATIN CAPITAL LETTER I
+            // WITH DOT ABOVE, whose simple lowercase mapping is 'i', though
+            // neither is in the other's closure. This class may over-estimate
+            // (`OperationControl::get_initial_character_class`), and its only
+            // reader is `ReCompiler::no_ambiguity`, which made `a*A` possessive
+            // from the closures {'A'} and {'a'} and so rejected "aA". Every
+            // character keeps a case-blind atom out of that judgement.
+            return CharacterClass::all();
         }
+        let mut builder = CodePointInversionListBuilder::new();
+        builder.add_char(self.atom[0]);
         CharacterClass::new(builder.build())
     }
 

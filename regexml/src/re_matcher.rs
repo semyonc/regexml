@@ -7,7 +7,7 @@ use crate::op_repeat::Repeat;
 
 #[cfg(test)]
 use crate::operation::Operation;
-use icu_casemap::CaseMapper;
+use icu_casemap::{CaseMapper, CaseMapperBorrowed};
 
 use crate::{
     operation::OperationControl,
@@ -22,7 +22,6 @@ pub(crate) struct ReMatcher<'a> {
     // string being matched against
     pub(crate) search: Vec<char>,
 
-    case_mapper: CaseMapper,
     // parenthesized subexpressions
     state: RefCell<State>,
     // whether captures must be correct after backtracking (`Undo`): always,
@@ -134,7 +133,6 @@ impl<'a> ReMatcher<'a> {
             program,
             search,
             state: RefCell::new(State::new()),
-            case_mapper: CaseMapper::new(),
             track_captures: true,
             answer_only: false,
             covered: RefCell::new(HashMap::new()),
@@ -346,7 +344,7 @@ impl<'a> ReMatcher<'a> {
         if let Some(prefix) = &self.program.prefix {
             // prefixed-anchored matching is possible
             let ignore_case = self.program.flags.is_case_independent();
-            for j in i..self.search.len() + 1 - prefix.len() {
+            for j in i..(self.search.len() + 1).saturating_sub(prefix.len()) {
                 let mut prefix_ok = true;
                 if ignore_case {
                     for (k, prefix) in prefix.iter().enumerate() {
@@ -439,7 +437,10 @@ impl<'a> ReMatcher<'a> {
                     i = precondition.min_position;
                 }
                 let mut found = false;
-                for j in i..self.search.len() {
+                // up to the end of the haystack included: an operation that
+                // matches the empty string (an empty literal, from the empty
+                // pattern with the `q` flag) matches there too
+                for j in i..=self.search.len() {
                     if (precondition.fixed_position.is_none()
                         || precondition.fixed_position == Some(j))
                         && precondition
@@ -612,15 +613,7 @@ impl<'a> ReMatcher<'a> {
     }
 
     pub(crate) fn equal_case_blind(&self, a: char, b: char) -> bool {
-        if a == b {
-            return true;
-        }
-        let lowercase_a = self.case_mapper.simple_lowercase(a);
-        let lowercase_b = self.case_mapper.simple_lowercase(b);
-        if lowercase_a == lowercase_b {
-            return true;
-        }
-        false
+        equal_case_blind(a, b)
     }
 
     // state related
@@ -868,6 +861,15 @@ impl<'a> ReMatcher<'a> {
             }
         }
     }
+}
+
+/// Whether the characters `a` and `b` match each other under the `i` flag:
+/// they are equal, or equal once both are mapped to lower case (ICU's simple
+/// lowercase mapping). The matcher and `position_sets` both compare with this
+/// function, so that they cannot differ on it.
+pub(crate) fn equal_case_blind(a: char, b: char) -> bool {
+    const CASE_MAPPER: CaseMapperBorrowed<'static> = CaseMapper::new();
+    a == b || CASE_MAPPER.simple_lowercase(a) == CASE_MAPPER.simple_lowercase(b)
 }
 
 // Records that the write of group `group_nr` about to be logged at `at` is
